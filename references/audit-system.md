@@ -102,7 +102,7 @@ python audit_sync.py sync_platform --project-root . [--platform <name>]
 
 ## 自动化规则（脚本驱动）
 
-以下规则由 `evolve/scripts/audit_sync.py` 自动执行：
+以下规则由 `<skill-root>/scripts/audit_sync.py` 自动执行：
 
 ### 1) TL;DR 同步
 - **强调规则**：`vio ≥ 3 且遵守率 < 50%` → 自动追加至 EVOLVE.md 的 TL;DR 章节顶部，标注 `⚠️ 高频违反`
@@ -187,7 +187,7 @@ python audit_sync.py promote
 python audit_sync.py promote --platform codex
 ```
 
-> **注意**：`audit_sync.py` 位于 self-evolve skill 目录（`~/.claude/skills/self-evolve/scripts/`），执行时需传入项目根目录路径，或在项目根目录下运行。
+> **注意**：`audit_sync.py` 位于 self-evolve skill 目录（`<skill-root>/scripts/`），执行时需传入项目根目录路径。
 
 ## 健康度检查（独立脚本）
 
@@ -219,4 +219,4 @@ python health_check.py --project-root . --json
 - 项目交接时运行，快速了解经验体系状态
 - 定期巡检（如每周一次）
 
-> **注意**：`health_check.py` 与 `audit_sync.py` 位于同一目录（`~/.claude/skills/self-evolve/scripts/`）。
+> **注意**：`health_check.py` 与 `audit_sync.py` 位于同一目录（`<skill-root>/scripts/`）。

@@ -33,8 +33,12 @@ mkdir -p evolve/history evolve/runbooks
 ## 3. 初始化审计系统
 执行以下命令，在 `evolve/` 目录下生成 `audit.csv` 初始文件：
 ```bash
-python ~/.claude/skills/self-evolve/scripts/audit_sync.py init --project-root .
+python <skill-root>/scripts/audit_sync.py init --project-root .
 ```
+
+说明：
+- 默认模式下，脚本位于 skill 仓库（`<skill-root>/scripts/`），项目内不会创建 `evolve/scripts/`。
+- 若你希望“项目内固化脚本版本”（例如离线归档/版本冻结），可手动复制到 `evolve/scripts/`，但后续升级需自行维护。
 
 初始化后，`audit.csv` 表头应包含 `platform` 字段：
 ```csv
