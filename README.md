@@ -5,6 +5,10 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Version](https://img.shields.io/badge/Python-3.9+-green.svg)](https://www.python.org/downloads/)
 
+Language: **English** | [简体中文](README_ZH.md)
+
+![Evolve-Skill Hero Banner](asset/images/readme/Hero%20Banner.png)
+
 **Evolve-Skill** is an **experience evolution framework** designed for AI coding collaboration (Claude Code, Cursor, Gemini, GitHub Copilot, etc.). Through a structured retrospective workflow and a local CLI toolchain, it turns fragmented tacit knowledge into auditable, quantifiable, and isolated engineering assets. It enables your AI assistant to self-summarize, self-constrain, and self-improve.
 
 ---
@@ -61,6 +65,8 @@ After triggering, the AI automatically runs context reading, audit scoring (`sco
 ## 🛠️ How Does It Work?
 
 After the skill is triggered, the AI runs in two layers: "overview + executable flow".
+
+![The Closed-Loop Workflow](asset/images/readme/The%20Closed-Loop%20Workflow.png)
 
 ### Overview Flow (4 Steps)
 

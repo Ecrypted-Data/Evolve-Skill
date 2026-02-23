@@ -5,6 +5,10 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python Version](https://img.shields.io/badge/Python-3.9+-green.svg)](https://www.python.org/downloads/)
 
+语言: [English](README.md) | **简体中文**
+
+![Evolve-Skill 首页横幅](asset/images/readme/Hero%20Banner.png)
+
 **Evolve-Skill** 是一个专为 AI 编程协作场景（如 Claude Code, Cursor, Gemini, GitHub Copilot 等）设计的**经验进化框架**。它通过结构化的复盘流程与本地 CLI 工具链，将零散的隐性经验转化为可审计、可量化、可隔离的工程资产。让你的 AI 助手学会自我总结、自我约束与自我进化。
 
 ---
@@ -61,6 +65,8 @@ git clone https://github.com/Ecrypted-Data/Evolve-Skill.git ~/.claude/skills/Evo
 ## 🛠️ 它是如何工作的？
 
 skill触发后，AI 将按“概览 + 执行版”两层流程运行。
+
+![闭环工作流](asset/images/readme/The%20Closed-Loop%20Workflow.png)
 
 ### 概览流程（4 步）
 
