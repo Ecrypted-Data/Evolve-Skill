@@ -17,6 +17,7 @@ Usage:
 
   --project-root      Project root path (default: current working directory)
   --platform          Platform label (claude/gemini/codex/cursor)
+  --evolve-platform   Limit EVOLVE.md sync target to universal + this platform
   --no-platform-sync  For sync only: skip platform file sync
 
 Suggested workflow:
@@ -223,6 +224,35 @@ def extract_platform_arg(args: list[str]) -> Optional[str]:
         if arg.startswith("--platform="):
             return canonical_platform(arg.split("=", 1)[1])
     return None
+
+
+def extract_evolve_platform_arg(args: list[str]) -> Optional[str]:
+    """提取 --evolve-platform 参数，支持 --evolve-platform x / --evolve-platform=x"""
+    for i, arg in enumerate(args):
+        if arg == "--evolve-platform" and i + 1 < len(args):
+            return canonical_platform(args[i + 1])
+        if arg.startswith("--evolve-platform="):
+            return canonical_platform(arg.split("=", 1)[1])
+    return None
+
+
+def filter_rows_for_evolve_sync(rows: list[dict], evolve_platform: Optional[str]) -> list[dict]:
+    """
+    限制 EVOLVE.md 的同步目标：
+    - 未指定平台或平台为 all：全量
+    - 指定平台：保留全部通用规则（R-），以及该平台的 S- 规则
+    """
+    if not evolve_platform or evolve_platform == PLATFORM_ALL:
+        return rows
+
+    filtered = []
+    for row in rows:
+        if is_platform_rule(row):
+            if row_platform(row) == evolve_platform:
+                filtered.append(row)
+        else:
+            filtered.append(row)
+    return filtered
 
 
 def match_platform(row: dict, platform: Optional[str], include_universal: bool = True) -> bool:
@@ -539,18 +569,56 @@ def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) 
     return hashlib.sha1(raw).hexdigest()[:12]
 
 
-def format_rule_line(row: dict) -> str:
+def clean_rule_content_line(line: str, rule_id: str) -> str:
+    text = line.strip()
+    text = re.sub(r"^[>\-*+\d.\s]+", "", text)
+    text = re.sub(r"\s*`\{hit:\d+\s+vio:\d+\s+err:\d+\}`\s*$", "", text)
+    text = re.sub(rf"^\[{re.escape(rule_id)}\]\s*", "", text)
+    text = text.replace("**", "")
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def extract_rule_content_map(evolve_content: str) -> dict[str, str]:
+    """从 EVOLVE.md 的 Rules 章节抽取每条规则的可读正文。"""
+    rules_text = extract_markdown_section(evolve_content, "Rules")
+    if not rules_text.strip():
+        return {}
+
+    content_map: dict[str, str] = {}
+    for raw_line in rules_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("<!--"):
+            continue
+        match = re.search(r"\[((?:R|S)-\d+)\]", line)
+        if not match:
+            continue
+        rule_id = match.group(1)
+        content = clean_rule_content_line(line, rule_id)
+        if content:
+            content_map[rule_id] = content
+    return content_map
+
+
+def format_rule_line(row: dict, rule_content_map: Optional[dict[str, str]] = None) -> str:
     title = row.get("title", "").strip()
     title_suffix = f" - {title}" if title else ""
-    return (
+    base = (
         f"- [{row['rule_id']}] [{row.get('scope', '')}]{title_suffix} "
         f"`{{hit:{row['hit']} vio:{row['vio']} err:{row['err']}}}`"
     )
+    if not rule_content_map:
+        return base
+
+    content = rule_content_map.get(row["rule_id"], "").strip()
+    if not content:
+        return base
+    return f"{base}\n  Content: {content}"
 
 
 def render_platform_sync_block(platform: str, evolve_content: str, rows: list[dict], digest: str) -> str:
     tldr_text = extract_markdown_section(evolve_content, "TL;DR")
     changelog_text = extract_markdown_section(evolve_content, "Changelog")
+    rule_content_map = extract_rule_content_map(evolve_content)
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
     platform_rows = [
@@ -578,13 +646,13 @@ def render_platform_sync_block(platform: str, evolve_content: str, rows: list[di
     ]
 
     if selected_platform_rows:
-        lines.extend(format_rule_line(row) for row in selected_platform_rows)
+        lines.extend(format_rule_line(row, rule_content_map) for row in selected_platform_rows)
     else:
         lines.append("- (no platform-specific rules found)")
 
     lines.extend(["", "### Universal High-Signal Rules"])
     if selected_universal_rows:
-        lines.extend(format_rule_line(row) for row in selected_universal_rows)
+        lines.extend(format_rule_line(row, rule_content_map) for row in selected_universal_rows)
     else:
         lines.append("- (no universal rules found)")
 
@@ -976,11 +1044,14 @@ def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
     if not content:
         return
 
+    evolve_platform = extract_evolve_platform_arg(args)
+    evolve_rows = filter_rows_for_evolve_sync(rows, evolve_platform)
+
     # 1) 更新 Rules 内联标签
-    content = update_rules_inline_tags(content, rows)
+    content = update_rules_inline_tags(content, evolve_rows)
 
     # 2) 更新 TL;DR 章节
-    content = update_tldr_section(content, rows)
+    content = update_tldr_section(content, evolve_rows)
 
     # 3) 标记待审查（区分手动 skip 和 auto_skip，protected 不参与）
     updated_rows = []
@@ -1009,6 +1080,8 @@ def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
     platform_summary = sync_platform_files(root, updated_rows, content, args)
 
     print(f"Sync complete -> {md_path}")
+    if evolve_platform and evolve_platform != PLATFORM_ALL:
+        print(f"EVOLVE.md sync target: universal + platform={evolve_platform}")
     print_platform_sync_summary(platform_summary)
     if review_items:
         print(f"Warning: marked for review: {', '.join(review_items)}")
