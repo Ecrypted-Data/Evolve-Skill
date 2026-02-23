@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 经验体系健康度检查 - Self-Evolve Skill 独立诊断工具
 
@@ -21,12 +21,22 @@
 """
 
 import csv
+import hashlib
 import re
 import sys
 import json
 from pathlib import Path
 from datetime import date
 from typing import Optional
+
+def _configure_stream_utf8(stream: object) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
+
+
+_configure_stream_utf8(sys.stdout)
+_configure_stream_utf8(sys.stderr)
 
 
 # ── 常量 ──
@@ -60,6 +70,15 @@ REVIEW_STALE_DAYS = 30     # review 状态超过此天数 → 积压
 SCOPE_CONCENTRATION = 0.5  # 单一 scope 占比超过此值 → 过度集中
 RULES_MIN = 5              # 规则总数下限
 RULES_MAX = 50             # 规则总数上限（建议值）
+
+KNOWN_PLATFORM_FILES = {
+    "codex": "AGENTS.md",
+    "claude": "CLAUDE.md",
+    "gemini": "GEMINI.md",
+    "cursor": "CURSOR.md",
+}
+PLATFORM_TARGETS_CONFIG = "platform_targets.json"
+AUTO_SYNC_BEGIN_PREFIX = "<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN"
 
 
 # ── 数据结构 ──
@@ -137,6 +156,10 @@ def evolve_md_path(root: Path) -> Path:
     return root / "EVOLVE.md"
 
 
+def platform_targets_path(root: Path) -> Path:
+    return root / "evolve" / PLATFORM_TARGETS_CONFIG
+
+
 # ── CSV 读取 ──
 
 def is_platform_rule(row: dict) -> bool:
@@ -191,6 +214,163 @@ def read_evolve(path: Path) -> str:
         return ""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
+
+
+def row_platform(row: dict) -> str:
+    return canonical_platform(row.get("platform", PLATFORM_ALL))
+
+
+def load_platform_target_map(root: Path) -> dict[str, str]:
+    config_path = platform_targets_path(root)
+    if not config_path.exists():
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    raw_map: dict[str, str] = {}
+    map_keys = ("platform_file_map", "platform_files")
+    if any(k in data for k in map_keys):
+        for key in map_keys:
+            candidate = data.get(key)
+            if isinstance(candidate, dict):
+                for platform, filepath in candidate.items():
+                    if isinstance(platform, str) and isinstance(filepath, str):
+                        raw_map[platform] = filepath
+    else:
+        for platform, filepath in data.items():
+            if isinstance(platform, str) and isinstance(filepath, str):
+                raw_map[platform] = filepath
+
+    normalized: dict[str, str] = {}
+    for platform, filepath in raw_map.items():
+        p = canonical_platform(platform)
+        if p and p != PLATFORM_ALL and filepath.strip():
+            normalized[p] = filepath.strip()
+    return normalized
+
+
+def extract_platform_marker_map(root: Path) -> dict[str, Path]:
+    marker_map: dict[str, Path] = {}
+    pattern = re.compile(
+        r"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform=([^\s>]+)[^>]*-->",
+        re.IGNORECASE,
+    )
+    for md_path in root.glob("*.md"):
+        try:
+            text = md_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in pattern.finditer(text):
+            platform = canonical_platform(match.group(1))
+            if platform and platform != PLATFORM_ALL and platform not in marker_map:
+                marker_map[platform] = md_path
+    return marker_map
+
+
+def platform_slug(platform: str) -> str:
+    slug = re.sub(r"[^a-z0-9._-]+", "-", platform.lower()).strip("-_.")
+    return slug or "platform"
+
+
+def default_platform_filename(platform: str) -> str:
+    if platform in KNOWN_PLATFORM_FILES:
+        return KNOWN_PLATFORM_FILES[platform]
+    return f"{platform_slug(platform).upper()}.md"
+
+
+def resolve_platform_file_path(
+    root: Path,
+    platform: str,
+    config_map: dict[str, str],
+    marker_map: dict[str, Path],
+) -> Path:
+    if platform in config_map:
+        configured = Path(config_map[platform])
+        return configured if configured.is_absolute() else root / configured
+    if platform in marker_map:
+        return marker_map[platform]
+    return root / default_platform_filename(platform)
+
+
+def discover_sync_platforms(
+    root: Path,
+    rows: list[dict],
+    config_map: dict[str, str],
+    marker_map: dict[str, Path],
+) -> list[str]:
+    platforms = set()
+    platforms.update(p for p in config_map.keys() if p != PLATFORM_ALL)
+    platforms.update(p for p in marker_map.keys() if p != PLATFORM_ALL)
+    platforms.update(
+        p for p, filename in KNOWN_PLATFORM_FILES.items()
+        if (root / filename).exists()
+    )
+    for row in rows:
+        if is_platform_rule(row):
+            p = row_platform(row)
+            if p != PLATFORM_ALL:
+                platforms.add(p)
+    return sorted(platforms)
+
+
+def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) -> str:
+    relevant = []
+    for row in rows:
+        if row["status"] not in ("active", "protected"):
+            continue
+        if is_platform_rule(row):
+            if row_platform(row) != platform:
+                continue
+        relevant.append(
+            {
+                "rule_id": row["rule_id"],
+                "platform": row_platform(row),
+                "scope": row.get("scope", ""),
+                "title": row.get("title", ""),
+                "hit": row["hit"],
+                "vio": row["vio"],
+                "err": row["err"],
+                "status": row.get("status", ""),
+            }
+        )
+    relevant.sort(key=lambda r: r["rule_id"])
+
+    payload = {
+        "platform": platform,
+        "evolve_sha1": hashlib.sha1(evolve_content.encode("utf-8")).hexdigest(),
+        "rules": relevant,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+
+def read_platform_block_state(path: Path, platform: str) -> tuple[bool, Optional[str]]:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return False, None
+
+    with_digest = re.search(
+        rf"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}\s+digest=([0-9a-f]+)[^>]*-->",
+        content,
+        re.IGNORECASE,
+    )
+    if with_digest:
+        return True, with_digest.group(1)
+
+    exists = re.search(
+        rf"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}[^\n>]*-->",
+        content,
+        re.IGNORECASE,
+    )
+    return bool(exists), None
 
 
 # ── 推导指标 ──
@@ -314,7 +494,7 @@ def check_data_integrity(rows: list[dict], csv_path: Path) -> DimensionReport:
 #  维度 2：EVOLVE.md 一致性
 # ══════════════════════════════════════════════════════════
 
-def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path) -> DimensionReport:
+def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, root: Path) -> DimensionReport:
     report = DimensionReport("EVOLVE.md 一致性", "CSV 与 EVOLVE.md 之间的数据同步状态")
 
     if not evolve_content:
@@ -383,6 +563,76 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path) 
     else:
         report.add(CheckResult("TL;DR 同步", "PASS",
                                "高频违反规则已在 TL;DR 中标注" if should_in_tldr else "当前无需 TL;DR 警告"))
+
+    # 2.4 平台文件自动同步一致性
+    config_map = load_platform_target_map(root)
+    marker_map = extract_platform_marker_map(root)
+    platforms = discover_sync_platforms(root, rows, config_map, marker_map)
+
+    if not platforms:
+        report.add(CheckResult("平台文件覆盖", "PASS", "未发现需要同步的平台文件"))
+        report.add(CheckResult("平台自动区块", "PASS", "无平台目标，无需区块校验"))
+        report.add(CheckResult("平台 Digest 新鲜度", "PASS", "无平台目标，无需 digest 校验"))
+        return report
+
+    missing_files = []
+    missing_blocks = []
+    missing_digest = []
+    stale_digest = []
+    for platform in platforms:
+        target_path = resolve_platform_file_path(root, platform, config_map, marker_map)
+        if not target_path.exists():
+            missing_files.append(f"{platform} -> {target_path}")
+            continue
+
+        has_block, current_digest = read_platform_block_state(target_path, platform)
+        if not has_block:
+            missing_blocks.append(f"{platform} -> {target_path}")
+            continue
+        if not current_digest:
+            missing_digest.append(f"{platform} -> {target_path}")
+            continue
+
+        expected_digest = build_platform_digest(platform, evolve_content, rows)
+        if current_digest != expected_digest:
+            stale_digest.append(
+                f"{platform} -> {target_path} (current:{current_digest} expected:{expected_digest})"
+            )
+
+    if missing_files:
+        report.add(CheckResult(
+            "平台文件覆盖",
+            "WARN",
+            f"{len(missing_files)}/{len(platforms)} 个平台目标缺少文件（需运行 sync）",
+            missing_files[:10],
+        ))
+    else:
+        report.add(CheckResult(
+            "平台文件覆盖",
+            "PASS",
+            f"全部 {len(platforms)} 个平台目标均有对应文件",
+        ))
+
+    block_issues = missing_blocks + missing_digest
+    if block_issues:
+        report.add(CheckResult(
+            "平台自动区块",
+            "WARN",
+            f"{len(block_issues)} 个平台文件缺少有效自动区块（需运行 sync）",
+            block_issues[:10],
+        ))
+    else:
+        report.add(CheckResult("平台自动区块", "PASS", "全部平台文件包含有效自动区块"))
+
+    if stale_digest:
+        report.add(CheckResult(
+            "平台 Digest 新鲜度",
+            "WARN",
+            f"{len(stale_digest)} 个平台文件 digest 过期（需运行 sync）",
+            stale_digest[:10],
+        ))
+    else:
+        report.add(CheckResult("平台 Digest 新鲜度", "PASS", "平台文件 digest 与当前数据一致"))
 
     return report
 
@@ -825,7 +1075,7 @@ def main():
     # 执行 6 个维度的检查
     dimensions = [
         check_data_integrity(rows, csv_path),
-        check_consistency(rows, evolve_content, md_path),
+        check_consistency(rows, evolve_content, md_path, root),
         check_structure(rows),
         check_freshness(rows),
         check_quality(rows),
@@ -842,3 +1092,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

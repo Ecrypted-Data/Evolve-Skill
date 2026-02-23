@@ -65,9 +65,19 @@ python audit_sync.py score "R-001:+hit R-008:+vio+err" --scope "前端,React" --
 - 未打分但匹配条件（scope/platform）命中的条目自动 `auto_skip+1`
 - `--scope` / `--platform` 共同决定哪些未打分条目会被 auto_skip（都省略则不自动 skip）
 
-### 4) 同步到 EVOLVE.md
+### 4) 核心同步（EVOLVE + 平台文件）
 ```bash
 python audit_sync.py sync --project-root .
+```
+- 默认执行两类同步：
+  - EVOLVE.md 指标同步（TL;DR + Rules 内联标签）
+  - 平台文件自动同步（已知平台 + 新增平台 + 配置映射平台）
+- 可选参数：
+  - `--platform <name>`：仅同步指定平台文件
+  - `--no-platform-sync`：仅更新 EVOLVE.md，跳过平台文件同步
+- 仅做平台同步：
+```bash
+python audit_sync.py sync_platform --project-root . [--platform <name>]
 ```
 
 ## 推导指标（按需计算，不存储）
@@ -105,13 +115,20 @@ python audit_sync.py sync --project-root .
 - [R-001] **[部署/Docker]** 必须先检查 .env 是否存在  `{hit:5 vio:1 err:0}`
 ```
 
-### 3) 待审查标记
+### 3) 平台文件自动同步
+- 自动发现目标平台：已知平台文件 + `S-xxx` 中出现的平台 + 现有自动区块 + `evolve/platform_targets.json` 映射
+- 未预设平台默认输出到 `<PLATFORM>.md`（大写）
+- 同步采用区块替换，不覆盖手写内容：
+  - `<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN platform=<name> digest=<hash> ... -->`
+  - `<!-- SELF_EVOLVE:AUTO_SYNC:END -->`
+
+### 4) 待审查标记
 - **手动 skip ≥ 5** → status 改为 `review`（AI 明确确认"没触及"，信号可靠）
 - **auto_skip ≥ 8** → status 改为 `review`（多次 filter 匹配但未被打分，信号较弱，阈值更高）
 - 用户确认"已过时" → status 改为 `archived`，规则移至 `evolve/archived-rules.md`
 - 用户确认"仍有效" → skip 和 auto_skip 清零，status 恢复 `active`
 
-### 4) 低价值嫌疑检测
+### 5) 低价值嫌疑检测
 - **条件**：`hit ≥ 8 且历史 vio = 0 且历史 err = 0 且 origin ≠ error`（从未被违反的高频命中规则，且非源于实际错误）
 - **含义**：可能是"正确的废话"——规则表述的是 AI 本就会做的事，没有实际约束力
 - **排除**：`origin = error` 的规则即使 vio=0 也不触发低价值检测（它曾经真实出过错，当前 vio=0 只说明规则写得好）
@@ -119,7 +136,7 @@ python audit_sync.py sync --project-root .
   - "确实重要，防患于未然" → status 改为 `protected`（不再检测低价值）
   - "正确的废话，可以删除" → status 改为 `archived`
 
-### 5) 用户级晋升建议
+### 6) 用户级晋升建议
 - 平台教训（S-xxx）`vio ≥ 3 且遵守率 < 50%` → 建议晋升至用户级配置文件
 - 可通过 `--platform` 仅查看某个平台的晋升建议
 - 脚本输出晋升建议列表，由 AI 在复盘时呈现给用户确认
@@ -151,6 +168,15 @@ python audit_sync.py score "R-001:+hit S-003:+vio" --scope "前端,React" --plat
 # 从 CSV 同步指标到 EVOLVE.md（TL;DR + Rules 内联标签）
 python audit_sync.py sync
 
+# 仅同步某个平台文件
+python audit_sync.py sync --platform codex
+
+# 跳过平台文件同步，仅更新 EVOLVE.md
+python audit_sync.py sync --no-platform-sync
+
+# 仅同步平台文件（不改写 EVOLVE.md）
+python audit_sync.py sync_platform
+
 # 查看审计报告（推导指标 + 异常检测）
 python audit_sync.py report
 
@@ -180,7 +206,7 @@ python health_check.py --project-root . --json
 | # | 维度 | 检查项 |
 |---|------|--------|
 | 1 | 数据完整性 | 文件存在、表头完整、rule_id 唯一、origin/status 合法、数值非负、err≤vio、error 初始值、平台标签完整性 |
-| 2 | EVOLVE.md 一致性 | 规则覆盖率、内联标签同步、TL;DR 同步 |
+| 2 | EVOLVE.md 一致性 | 规则覆盖率、内联标签同步、TL;DR 同步、平台文件覆盖/区块/digest 新鲜度 |
 | 3 | 体系结构 | 规则总数、scope 分布均衡度、origin 多样性、status 分布 |
 | 4 | 审计活跃度 | 僵尸规则（>30天未审计）、7天覆盖率、review 积压 |
 | 5 | 质量指标 | 整体遵守率、高危/难执行/低价值占比、protected 确认率 |

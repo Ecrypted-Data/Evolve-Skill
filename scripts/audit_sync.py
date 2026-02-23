@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 审计同步脚本 - Self-Evolve Skill 自动化工具
 
@@ -7,7 +7,8 @@
   scopes  - 列出所有有效的 scope 类型
   filter  - 按 scope / platform 筛选相关经验条目（精简输出，节省上下文）
   score   - 一行式批量打分，未打分但 filter 匹配的条目自动 auto_skip+1
-  sync    - 从 audit.csv 同步指标到 EVOLVE.md（TL;DR + Rules 内联标签）
+  sync    - 从 audit.csv 同步指标到 EVOLVE.md，并自动同步平台文件区块
+  sync_platform - 仅同步平台文件区块（不改写 EVOLVE.md）
   report  - 输出审计报告（推导指标 + 异常检测 + 待审查项）
   promote - 输出晋升建议（平台教训 → 用户级配置，可按平台过滤）
 
@@ -16,21 +17,33 @@
 
   --project-root  项目根目录路径（默认：当前工作目录）
   --platform      平台标签（如 claude/gemini/codex/cursor），用于筛选平台教训（S-xxx）
+  --no-platform-sync  仅用于 sync：跳过平台文件同步
 
 审计辅助工作流（AI 复盘时使用）：
   1. scopes                          → 查看有哪些 scope
   2. filter "前端,React" --platform codex → 筛选相关条目
   3. score "R-001:+hit R-003:+vio+err" --scope "前端,React" --platform codex
                                         → 一行打分（仅 codex 平台教训会被纳入平台筛选）
-  4. sync                            → 同步到 EVOLVE.md
+  4. sync                            → 同步到 EVOLVE.md + 平台文件
 """
 
 import csv
+import hashlib
+import json
 import re
 import sys
 from pathlib import Path
 from datetime import date
 from typing import Optional
+
+def _configure_stream_utf8(stream: object) -> None:
+    reconfigure = getattr(stream, "reconfigure", None)
+    if callable(reconfigure):
+        reconfigure(encoding="utf-8", errors="replace")
+
+
+_configure_stream_utf8(sys.stdout)
+_configure_stream_utf8(sys.stderr)
 
 
 # ── CSV 字段定义 ──
@@ -60,6 +73,17 @@ KNOWN_PLATFORM_VALUES = {"all", "claude", "gemini", "codex", "cursor"}
 MANUAL_SKIP_THRESHOLD = 5   # 手动 skip 达到此值 → 标记 review
 AUTO_SKIP_THRESHOLD = 8     # 自动 skip 达到此值 → 标记 review
 
+KNOWN_PLATFORM_FILES = {
+    "codex": "AGENTS.md",
+    "claude": "CLAUDE.md",
+    "gemini": "GEMINI.md",
+    "cursor": "CURSOR.md",
+}
+PLATFORM_TARGETS_CONFIG = "platform_targets.json"
+AUTO_SYNC_BEGIN_PREFIX = "<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN"
+AUTO_SYNC_END = "<!-- SELF_EVOLVE:AUTO_SYNC:END -->"
+AUTO_SYNC_HEADER = "## Self-Evolve Auto Sync"
+
 
 # ── 路径工具 ──
 
@@ -86,6 +110,10 @@ def evolve_md_path(root: Path) -> Path:
 
 def archived_rules_path(root: Path) -> Path:
     return root / "evolve" / "archived-rules.md"
+
+
+def platform_targets_path(root: Path) -> Path:
+    return root / "evolve" / PLATFORM_TARGETS_CONFIG
 
 
 # ── CSV 读写 ──
@@ -309,6 +337,347 @@ def update_tldr_section(content: str, rows: list[dict]) -> str:
         content = content[:tldr_match.end()] + tldr_content + content[tldr_end:]
 
     return content
+
+
+def has_flag(args: list[str], flag: str) -> bool:
+    return flag in args
+
+
+def load_platform_target_map(root: Path) -> dict[str, str]:
+    """读取平台文件映射配置，支持 evolve/platform_targets.json。"""
+    config_path = platform_targets_path(root)
+    if not config_path.exists():
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"⚠️ 平台映射配置读取失败：{config_path} ({exc})")
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+
+    raw_map: dict[str, str] = {}
+    map_keys = ("platform_file_map", "platform_files")
+    if any(k in data for k in map_keys):
+        for key in map_keys:
+            candidate = data.get(key)
+            if isinstance(candidate, dict):
+                for platform, filepath in candidate.items():
+                    if isinstance(platform, str) and isinstance(filepath, str):
+                        raw_map[platform] = filepath
+    else:
+        for platform, filepath in data.items():
+            if isinstance(platform, str) and isinstance(filepath, str):
+                raw_map[platform] = filepath
+
+    normalized: dict[str, str] = {}
+    for platform, filepath in raw_map.items():
+        p = canonical_platform(platform)
+        if p and p != PLATFORM_ALL and filepath.strip():
+            normalized[p] = filepath.strip()
+    return normalized
+
+
+def extract_platform_marker_map(root: Path) -> dict[str, Path]:
+    """扫描根目录 markdown，提取已存在的平台自动同步区块。"""
+    marker_map: dict[str, Path] = {}
+    pattern = re.compile(
+        r"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform=([^\s>]+)[^>]*-->",
+        re.IGNORECASE,
+    )
+    for md_path in root.glob("*.md"):
+        try:
+            text = md_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in pattern.finditer(text):
+            platform = canonical_platform(match.group(1))
+            if platform and platform != PLATFORM_ALL and platform not in marker_map:
+                marker_map[platform] = md_path
+    return marker_map
+
+
+def platform_slug(platform: str) -> str:
+    slug = re.sub(r"[^a-z0-9._-]+", "-", platform.lower()).strip("-_.")
+    return slug or "platform"
+
+
+def default_platform_filename(platform: str) -> str:
+    if platform in KNOWN_PLATFORM_FILES:
+        return KNOWN_PLATFORM_FILES[platform]
+    return f"{platform_slug(platform).upper()}.md"
+
+
+def resolve_platform_file_path(
+    root: Path,
+    platform: str,
+    config_map: dict[str, str],
+    marker_map: dict[str, Path],
+) -> Path:
+    if platform in config_map:
+        configured = Path(config_map[platform])
+        return configured if configured.is_absolute() else root / configured
+    if platform in marker_map:
+        return marker_map[platform]
+    return root / default_platform_filename(platform)
+
+
+def discover_sync_platforms(
+    root: Path,
+    rows: list[dict],
+    config_map: dict[str, str],
+    marker_map: dict[str, Path],
+    only_platform: Optional[str] = None,
+) -> list[str]:
+    platforms = set()
+
+    platforms.update(p for p in config_map.keys() if p != PLATFORM_ALL)
+    platforms.update(p for p in marker_map.keys() if p != PLATFORM_ALL)
+    platforms.update(
+        p for p, filename in KNOWN_PLATFORM_FILES.items()
+        if (root / filename).exists()
+    )
+
+    for row in rows:
+        if not is_platform_rule(row):
+            continue
+        p = row_platform(row)
+        if p != PLATFORM_ALL:
+            platforms.add(p)
+
+    if only_platform:
+        p = canonical_platform(only_platform)
+        if p and p != PLATFORM_ALL:
+            return [p]
+    return sorted(platforms)
+
+
+def extract_markdown_section(content: str, heading: str) -> str:
+    match = re.search(rf"^##\s+{re.escape(heading)}\s*$", content, re.MULTILINE)
+    if not match:
+        return ""
+    next_section = re.search(r"^##\s+", content[match.end():], re.MULTILINE)
+    end = match.end() + next_section.start() if next_section else len(content)
+    return content[match.end():end].strip()
+
+
+def trim_multiline(text: str, max_lines: int = 8, max_chars: int = 900) -> list[str]:
+    if not text.strip():
+        return ["- (no data)"]
+
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    trimmed: list[str] = []
+    total = 0
+    for line in lines:
+        if len(trimmed) >= max_lines:
+            break
+        if total + len(line) > max_chars:
+            remain = max_chars - total
+            if remain > 20:
+                trimmed.append(line[:remain].rstrip() + " ...")
+            break
+        trimmed.append(line)
+        total += len(line)
+
+    if len(lines) > len(trimmed):
+        trimmed.append("- ...")
+    return trimmed or ["- (no data)"]
+
+
+def select_high_signal_rules(rows: list[dict], limit: int) -> list[dict]:
+    ranked = sorted(
+        rows,
+        key=lambda r: (r["err"], r["vio"], activity(r), r["hit"], r["rule_id"]),
+        reverse=True,
+    )
+    return ranked[:limit]
+
+
+def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) -> str:
+    relevant = []
+    for row in rows:
+        if row["status"] not in ("active", "protected"):
+            continue
+        if is_platform_rule(row):
+            if row_platform(row) != platform:
+                continue
+        relevant.append(
+            {
+                "rule_id": row["rule_id"],
+                "platform": row_platform(row),
+                "scope": row.get("scope", ""),
+                "title": row.get("title", ""),
+                "hit": row["hit"],
+                "vio": row["vio"],
+                "err": row["err"],
+                "status": row.get("status", ""),
+            }
+        )
+    relevant.sort(key=lambda r: r["rule_id"])
+
+    payload = {
+        "platform": platform,
+        "evolve_sha1": hashlib.sha1(evolve_content.encode("utf-8")).hexdigest(),
+        "rules": relevant,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:12]
+
+
+def format_rule_line(row: dict) -> str:
+    title = row.get("title", "").strip()
+    title_suffix = f" - {title}" if title else ""
+    return (
+        f"- [{row['rule_id']}] [{row.get('scope', '')}]{title_suffix} "
+        f"`{{hit:{row['hit']} vio:{row['vio']} err:{row['err']}}}`"
+    )
+
+
+def render_platform_sync_block(platform: str, evolve_content: str, rows: list[dict], digest: str) -> str:
+    tldr_text = extract_markdown_section(evolve_content, "TL;DR")
+    changelog_text = extract_markdown_section(evolve_content, "Changelog")
+
+    active_rows = [r for r in rows if r["status"] in ("active", "protected")]
+    platform_rows = [
+        r for r in active_rows
+        if is_platform_rule(r) and row_platform(r) == platform
+    ]
+    universal_rows = [r for r in active_rows if not is_platform_rule(r)]
+
+    selected_platform_rows = select_high_signal_rules(platform_rows, limit=8)
+    selected_universal_rows = select_high_signal_rules(universal_rows, limit=6)
+
+    lines = [
+        AUTO_SYNC_HEADER,
+        "",
+        "This block is auto-generated from `EVOLVE.md` and `evolve/audit.csv`.",
+        "Edit `EVOLVE.md` instead of editing this block.",
+        f"- Platform: `{platform}`",
+        f"- Updated: `{date.today().isoformat()}`",
+        f"- Digest: `{digest}`",
+        "",
+        "### TL;DR Snapshot",
+        *trim_multiline(tldr_text, max_lines=8, max_chars=900),
+        "",
+        f"### Platform Rules ({platform})",
+    ]
+
+    if selected_platform_rows:
+        lines.extend(format_rule_line(row) for row in selected_platform_rows)
+    else:
+        lines.append("- (no platform-specific rules found)")
+
+    lines.extend(["", "### Universal High-Signal Rules"])
+    if selected_universal_rows:
+        lines.extend(format_rule_line(row) for row in selected_universal_rows)
+    else:
+        lines.append("- (no universal rules found)")
+
+    lines.extend(["", "### Recent Changelog Snapshot"])
+    lines.extend(trim_multiline(changelog_text, max_lines=8, max_chars=900))
+    return "\n".join(lines)
+
+
+def upsert_platform_sync_block(content: str, platform: str, block_content: str, digest: str) -> str:
+    begin_line = (
+        f"{AUTO_SYNC_BEGIN_PREFIX} platform={platform} "
+        f"digest={digest} updated={date.today().isoformat()} -->"
+    )
+    block = f"{begin_line}\n{block_content}\n{AUTO_SYNC_END}"
+    pattern = re.compile(
+        rf"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}[^\n]*-->\n.*?<!--\s*SELF_EVOLVE:AUTO_SYNC:END\s*-->",
+        re.DOTALL,
+    )
+    if pattern.search(content):
+        return pattern.sub(block, content, count=1)
+
+    base = content.rstrip()
+    if not base:
+        return block + "\n"
+    return base + "\n\n" + block + "\n"
+
+
+def sync_platform_files(
+    root: Path,
+    rows: list[dict],
+    evolve_content: str,
+    args: Optional[list[str]] = None,
+) -> dict[str, list[str]]:
+    args = args or []
+    if has_flag(args, "--no-platform-sync"):
+        return {"targets": [], "created": [], "updated": [], "unchanged": []}
+
+    config_map = load_platform_target_map(root)
+    marker_map = extract_platform_marker_map(root)
+    only_platform = extract_platform_arg(args)
+    platforms = discover_sync_platforms(root, rows, config_map, marker_map, only_platform)
+
+    created: list[str] = []
+    updated: list[str] = []
+    unchanged: list[str] = []
+    targets: list[str] = []
+
+    for platform in platforms:
+        target_path = resolve_platform_file_path(root, platform, config_map, marker_map)
+        targets.append(f"{platform}:{target_path}")
+
+        old_content = ""
+        existed = target_path.exists()
+        if existed:
+            try:
+                old_content = target_path.read_text(encoding="utf-8")
+            except OSError:
+                old_content = ""
+
+        digest = build_platform_digest(platform, evolve_content, rows)
+        block_content = render_platform_sync_block(platform, evolve_content, rows, digest)
+        new_content = upsert_platform_sync_block(old_content, platform, block_content, digest)
+
+        if new_content == old_content:
+            unchanged.append(str(target_path))
+            continue
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(target_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        if existed:
+            updated.append(str(target_path))
+        else:
+            created.append(str(target_path))
+
+    return {
+        "targets": targets,
+        "created": created,
+        "updated": updated,
+        "unchanged": unchanged,
+    }
+
+
+def print_platform_sync_summary(summary: dict[str, list[str]]) -> None:
+    targets = summary.get("targets", [])
+    if not targets:
+        print("平台文件同步：无目标（已跳过）")
+        return
+
+    created = summary.get("created", [])
+    updated = summary.get("updated", [])
+    unchanged = summary.get("unchanged", [])
+    print(
+        f"平台文件同步完成：{len(targets)} 个目标，"
+        f"created={len(created)} updated={len(updated)} unchanged={len(unchanged)}"
+    )
+    if created:
+        print("  新建：")
+        for path in created:
+            print(f"    - {path}")
+    if updated:
+        print("  更新：")
+        for path in updated:
+            print(f"    - {path}")
 
 
 # ── Scope 匹配工具 ──
@@ -580,8 +949,9 @@ def cmd_score(root: Path, args: list[str]) -> None:
         print(f"\n⚠️ 以下 rule_id 不存在：{', '.join(not_found)}")
 
 
-def cmd_sync(root: Path) -> None:
+def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
     """从 audit.csv 同步指标到 EVOLVE.md"""
+    args = args or []
     csv_path = audit_csv_path(root)
     md_path = evolve_md_path(root)
 
@@ -624,13 +994,34 @@ def cmd_sync(root: Path) -> None:
 
     write_evolve(md_path, content)
     write_audit(csv_path, updated_rows)
+    platform_summary = sync_platform_files(root, updated_rows, content, args)
 
     print(f"同步完成 → {md_path}")
+    print_platform_sync_summary(platform_summary)
     if review_items:
         print(f"⚠️ 以下规则已标记为待审查：{', '.join(review_items)}")
     if low_value_items:
         print(f"❔ 低价值嫌疑（hit≥8 且从未违反）：{', '.join(low_value_items)}")
         print("  → 运行 report 查看详情，由用户确认是否 protected 或 archived")
+
+
+def cmd_sync_platform(root: Path, args: Optional[list[str]] = None) -> None:
+    """仅同步平台文件（不改写 EVOLVE.md 内容）。"""
+    args = args or []
+    csv_path = audit_csv_path(root)
+    md_path = evolve_md_path(root)
+
+    rows = read_audit(csv_path)
+    if not rows:
+        print("audit.csv 为空或不存在，无法同步平台文件")
+        return
+
+    content = read_evolve(md_path)
+    if not content:
+        return
+
+    summary = sync_platform_files(root, rows, content, args)
+    print_platform_sync_summary(summary)
 
 
 def cmd_report(root: Path) -> None:
@@ -790,14 +1181,17 @@ def main():
     elif command == "init":
         cmd_init(root)
     elif command == "sync":
-        cmd_sync(root)
+        cmd_sync(root, remaining_args)
+    elif command == "sync_platform":
+        cmd_sync_platform(root, remaining_args)
     elif command == "report":
         cmd_report(root)
     else:
         print(f"未知命令：{command}")
-        print(f"可用命令：init, scopes, filter, score, sync, report, promote")
+        print(f"可用命令：init, scopes, filter, score, sync, sync_platform, report, promote")
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
+

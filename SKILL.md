@@ -17,7 +17,7 @@ description: 核心进化技能。在开发结束时调用，自动分析对话�
 └── evolve/
     ├── audit.csv                      # 审计数据（经验指标追踪）
     ├── scripts/                       # 自动化脚本（从 skill 目录复制或链接）
-    │   ├── audit_sync.py              # 审计同步（init/scopes/filter/score/sync/report/promote）
+    │   ├── audit_sync.py              # 审计同步（init/scopes/filter/score/sync/sync_platform/report/promote）
     │   └── health_check.py            # 健康度检查（6 维度诊断报告）
     ├── history/                       # 事件记录（分文件）
     │   └── YYYY-MM-DD-<topic>.md
@@ -46,6 +46,7 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 - 其他：`<PLATFORM>.md`
 
 这些文件只写入**平台特有**的偏好/坑位/限制，不写通用规则（通用只在 EVOLVE.md）。
+平台文件中的自动同步内容由 `audit_sync.py sync` / `sync_platform` 维护，使用 `<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN ... -->` 标记块更新，不覆盖手写内容。
 
 ---
 
@@ -101,7 +102,14 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 ### Step 5：执行文档更新与同步
 1. **新增内容**：使用 Edit 工具遵循“非破坏性追加”更新 `EVOLVE.md` 及其他文件（保留原文，只在对应章节末尾追加或在索引处更新链接）。
    - *注意：在编写具体内容时，请务必查阅 [references/writing-specs.md](references/writing-specs.md) 获取模板和规范。*
-2. **指标同步**：运行 `python ~/.claude/skills/self-evolve/scripts/audit_sync.py sync --project-root .` 将审计指标同步到 `EVOLVE.md`。
+2. **核心同步**：运行 `python ~/.claude/skills/self-evolve/scripts/audit_sync.py sync --project-root .`，一次完成：
+   - 审计指标同步到 `EVOLVE.md`（TL;DR + Rules 内联标签）
+   - 平台文件自动同步（已知平台 + audit.csv 中新增平台 + 配置映射平台）
+3. **可选控制**：
+   - 仅同步单个平台：`python ~/.claude/skills/self-evolve/scripts/audit_sync.py sync --project-root . --platform <name>`
+   - 仅同步平台文件：`python ~/.claude/skills/self-evolve/scripts/audit_sync.py sync_platform --project-root . [--platform <name>]`
+   - 临时跳过平台同步：`python ~/.claude/skills/self-evolve/scripts/audit_sync.py sync --project-root . --no-platform-sync`
+4. **可选映射配置**：在 `evolve/platform_targets.json` 指定平台到文件路径映射（例如将某个平台映射到自定义文件名/子目录）。
 
 ---
 
