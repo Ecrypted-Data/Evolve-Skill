@@ -1,9 +1,9 @@
 ---
-name: self-evolve
+name: Evolve-Skill
 description: 核心进化技能。在开发结束时调用，自动分析对话历史，将“项目进化资产”沉淀到 EVOLVE.md，并将平台特有的 AI 行为教训写入 CLAUDE.md / GEMINI.md / AGENTS.md，实现可审计、可复用的持续进化。触发词："总结经验"、"进化"、"evolve"、"复盘"。不适用于仅完成简单查询、单文件小改动或未产生可沉淀资产的场景。
 ---
 
-# Self-Evolve Skill
+# Evolve-Skill
 
 此 Skill 面向**本地项目开发**的长期积累：在任务结束后复盘，把隐性经验固化为“可执行的规则 + 可检索的事件记录 + 可维护的运行手册片段”，并对不同 AI 平台做最小必要的行为矫正。
 
@@ -45,7 +45,7 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 - 其他：`<PLATFORM>.md`
 
 这些文件只写入**平台特有**的偏好/坑位/限制，不写通用规则（通用只在 EVOLVE.md）。
-平台文件中的自动同步内容由 `audit_sync.py sync` / `sync_platform` 维护，使用 `<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN ... -->` 标记块更新，不覆盖手写内容。
+平台文件中的自动同步内容由 `audit_sync.py sync` / `sync_platform` 维护，使用 `<!-- EVOLVE_SKILL:AUTO_SYNC:BEGIN ... -->` 标记块更新，不覆盖手写内容。
 
 ---
 

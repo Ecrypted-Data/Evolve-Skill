@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python3
 """
-审计同步脚本 - Self-Evolve Skill 自动化工具
+审计同步脚本 - Evolve-Skill 自动化工具
 
 功能：
   init    - 初始化 evolve/audit.csv（如不存在）
@@ -80,9 +80,9 @@ KNOWN_PLATFORM_FILES = {
     "cursor": "CURSOR.md",
 }
 PLATFORM_TARGETS_CONFIG = "platform_targets.json"
-AUTO_SYNC_BEGIN_PREFIX = "<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN"
-AUTO_SYNC_END = "<!-- SELF_EVOLVE:AUTO_SYNC:END -->"
-AUTO_SYNC_HEADER = "## Self-Evolve Auto Sync"
+AUTO_SYNC_BEGIN_PREFIX = "<!-- EVOLVE_SKILL:AUTO_SYNC:BEGIN"
+AUTO_SYNC_END = "<!-- EVOLVE_SKILL:AUTO_SYNC:END -->"
+AUTO_SYNC_HEADER = "## Evolve-Skill Auto Sync"
 
 
 # ── 路径工具 ──
@@ -385,7 +385,7 @@ def extract_platform_marker_map(root: Path) -> dict[str, Path]:
     """扫描根目录 markdown，提取已存在的平台自动同步区块。"""
     marker_map: dict[str, Path] = {}
     pattern = re.compile(
-        r"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform=([^\s>]+)[^>]*-->",
+        r"<!--\s*EVOLVE_SKILL:AUTO_SYNC:BEGIN\s+platform=([^\s>]+)[^>]*-->",
         re.IGNORECASE,
     )
     for md_path in root.glob("*.md"):
@@ -588,7 +588,7 @@ def upsert_platform_sync_block(content: str, platform: str, block_content: str, 
     )
     block = f"{begin_line}\n{block_content}\n{AUTO_SYNC_END}"
     pattern = re.compile(
-        rf"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}[^\n]*-->\n.*?<!--\s*SELF_EVOLVE:AUTO_SYNC:END\s*-->",
+        rf"<!--\s*EVOLVE_SKILL:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}[^\n]*-->\n.*?<!--\s*EVOLVE_SKILL:AUTO_SYNC:END\s*-->",
         re.DOTALL,
     )
     if pattern.search(content):

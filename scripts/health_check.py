@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python3
 """
-经验体系健康度检查 - Self-Evolve Skill 独立诊断工具
+经验体系健康度检查 - Evolve-Skill 独立诊断工具
 
 对 evolve/ 目录下的 audit.csv 和 EVOLVE.md 进行全面健康度检查，
 输出结构化报告和总评分。
@@ -78,7 +78,7 @@ KNOWN_PLATFORM_FILES = {
     "cursor": "CURSOR.md",
 }
 PLATFORM_TARGETS_CONFIG = "platform_targets.json"
-AUTO_SYNC_BEGIN_PREFIX = "<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN"
+AUTO_SYNC_BEGIN_PREFIX = "<!-- EVOLVE_SKILL:AUTO_SYNC:BEGIN"
 
 
 # ── 数据结构 ──
@@ -259,7 +259,7 @@ def load_platform_target_map(root: Path) -> dict[str, str]:
 def extract_platform_marker_map(root: Path) -> dict[str, Path]:
     marker_map: dict[str, Path] = {}
     pattern = re.compile(
-        r"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform=([^\s>]+)[^>]*-->",
+        r"<!--\s*EVOLVE_SKILL:AUTO_SYNC:BEGIN\s+platform=([^\s>]+)[^>]*-->",
         re.IGNORECASE,
     )
     for md_path in root.glob("*.md"):
@@ -358,7 +358,7 @@ def read_platform_block_state(path: Path, platform: str) -> tuple[bool, Optional
         return False, None
 
     with_digest = re.search(
-        rf"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}\s+digest=([0-9a-f]+)[^>]*-->",
+        rf"<!--\s*EVOLVE_SKILL:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}\s+digest=([0-9a-f]+)[^>]*-->",
         content,
         re.IGNORECASE,
     )
@@ -366,7 +366,7 @@ def read_platform_block_state(path: Path, platform: str) -> tuple[bool, Optional
         return True, with_digest.group(1)
 
     exists = re.search(
-        rf"<!--\s*SELF_EVOLVE:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}[^\n>]*-->",
+        rf"<!--\s*EVOLVE_SKILL:AUTO_SYNC:BEGIN\s+platform={re.escape(platform)}[^\n>]*-->",
         content,
         re.IGNORECASE,
     )

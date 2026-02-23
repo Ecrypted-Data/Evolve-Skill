@@ -119,8 +119,8 @@ python audit_sync.py sync_platform --project-root . [--platform <name>]
 - 自动发现目标平台：已知平台文件 + `S-xxx` 中出现的平台 + 现有自动区块 + `evolve/platform_targets.json` 映射
 - 未预设平台默认输出到 `<PLATFORM>.md`（大写）
 - 同步采用区块替换，不覆盖手写内容：
-  - `<!-- SELF_EVOLVE:AUTO_SYNC:BEGIN platform=<name> digest=<hash> ... -->`
-  - `<!-- SELF_EVOLVE:AUTO_SYNC:END -->`
+  - `<!-- EVOLVE_SKILL:AUTO_SYNC:BEGIN platform=<name> digest=<hash> ... -->`
+  - `<!-- EVOLVE_SKILL:AUTO_SYNC:END -->`
 
 ### 4) 待审查标记
 - **手动 skip ≥ 5** → status 改为 `review`（AI 明确确认"没触及"，信号可靠）
@@ -187,7 +187,7 @@ python audit_sync.py promote
 python audit_sync.py promote --platform codex
 ```
 
-> **注意**：`audit_sync.py` 位于 self-evolve skill 目录（`<skill-root>/scripts/`），执行时需传入项目根目录路径。
+> **注意**：`audit_sync.py` 位于 Evolve-Skill skill 目录（`<skill-root>/scripts/`），执行时需传入项目根目录路径。
 
 ## 健康度检查（独立脚本）
 
