@@ -1,6 +1,9 @@
-# Evolve-Skill 🧬
+﻿# Evolve-Skill 🧬
 
 > **让 AI 编程助手在每次开发结束后自动复盘、沉淀经验、持续进化的核心技能仓库。**
+
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python Version](https://img.shields.io/badge/Python-3.9+-green.svg)](https://www.python.org/downloads/)
 
 **Evolve-Skill** 是一个专为 AI 编程协作场景（如 Claude Code, Cursor, Gemini, GitHub Copilot 等）设计的**经验进化框架**。它通过结构化的复盘流程与本地 CLI 工具链，将零散的隐性经验转化为可审计、可量化、可隔离的工程资产。让你的 AI 助手学会自我总结、自我约束与自我进化。
 
@@ -235,4 +238,4 @@ python scripts/health_check.py --project-root .
 
 ## License
 
-Apache-2.0 
+本项目基于 Apache-2.0 License 开源。
