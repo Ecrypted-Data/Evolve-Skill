@@ -1,26 +1,27 @@
 ﻿#!/usr/bin/env python3
 """
-经验体系健康度检查 - Evolve-Skill 独立诊断工具
+Health check utility for Evolve-Skill.
 
-对 evolve/ 目录下的 audit.csv 和 EVOLVE.md 进行全面健康度检查，
-输出结构化报告和总评分。
+This script validates `evolve/audit.csv` and `EVOLVE.md`,
+then prints a structured report and overall score.
 
-用法：
+Usage:
   python health_check.py [--project-root <path>] [--json]
 
-  --project-root  项目根目录路径（默认：当前工作目录）
-  --json          以 JSON 格式输出（便于自动化消费）
+  --project-root  Project root path (default: current working directory)
+  --json          Output report as JSON for automation
 
-检查维度：
-  1. 数据完整性（Data Integrity）
-  2. EVOLVE.md 一致性（Consistency）
-  3. 体系结构（Structure）
-  4. 审计活跃度（Freshness）
-  5. 质量指标（Quality）
-  6. 防腐检查（Anti-Corruption）
+Dimensions:
+  1. Data Integrity
+  2. EVOLVE.md Consistency
+  3. Structure
+  4. Freshness
+  5. Quality
+  6. Anti-Corruption
 """
 
 import csv
+import builtins
 import hashlib
 import re
 import sys
@@ -37,6 +38,18 @@ def _configure_stream_utf8(stream: object) -> None:
 
 _configure_stream_utf8(sys.stdout)
 _configure_stream_utf8(sys.stderr)
+
+
+def _ascii_text(value: object) -> str:
+    return str(value).encode("ascii", "backslashreplace").decode("ascii")
+
+
+def _safe_print(*args: object, sep: str = " ", end: str = "\n", file=sys.stdout, flush: bool = False) -> None:
+    rendered = sep.join(_ascii_text(arg) for arg in args)
+    builtins.print(rendered, end=end, file=file, flush=flush)
+
+
+print = _safe_print
 
 
 # ── 常量 ──
@@ -389,55 +402,55 @@ def danger_rate(row: dict) -> Optional[float]:
 # ══════════════════════════════════════════════════════════
 
 def check_data_integrity(rows: list[dict], csv_path: Path) -> DimensionReport:
-    report = DimensionReport("数据完整性", "CSV 字段合法性、唯一性、逻辑一致性")
+    report = DimensionReport("Data Integrity", "CSV field validity, uniqueness, and logical consistency")
 
     # 1.1 文件存在性
     if not csv_path.exists():
-        report.add(CheckResult("文件存在", "FAIL", "audit.csv 不存在"))
+        report.add(CheckResult("File Presence", "FAIL", "audit.csv is missing"))
         return report
-    report.add(CheckResult("文件存在", "PASS", f"audit.csv 存在（{len(rows)} 条记录）"))
+    report.add(CheckResult("File Presence", "PASS", f"audit.csv exists ({len(rows)} rows)"))
 
     # 1.1b 表头完整性（兼容旧版：缺字段记 WARN）
     headers = read_csv_headers(csv_path)
     missing_headers = sorted(REQUIRED_FIELDS - headers)
     if missing_headers:
-        report.add(CheckResult("CSV 表头完整", "WARN",
-                               f"缺少字段：{', '.join(missing_headers)}（可通过运行 audit_sync.py 自动补齐）"))
+        report.add(CheckResult("CSV Header Completeness", "WARN",
+                               f"Missing fields: {', '.join(missing_headers)} (run audit_sync.py to auto-fill)"))
     else:
-        report.add(CheckResult("CSV 表头完整", "PASS", "CSV 表头完整"))
+        report.add(CheckResult("CSV Header Completeness", "PASS", "CSV header is complete"))
 
     if not rows:
-        report.add(CheckResult("数据非空", "WARN", "audit.csv 为空，尚无经验记录"))
+        report.add(CheckResult("Non-Empty Data", "WARN", "audit.csv is empty; no rules recorded yet"))
         return report
 
     # 1.2 rule_id 唯一性
     ids = [r["rule_id"] for r in rows]
     duplicates = [rid for rid in set(ids) if ids.count(rid) > 1]
     if duplicates:
-        report.add(CheckResult("rule_id 唯一", "FAIL",
-                               f"发现重复 rule_id：{', '.join(duplicates)}",
-                               [f"{rid} 出现 {ids.count(rid)} 次" for rid in duplicates]))
+        report.add(CheckResult("Unique rule_id", "FAIL",
+                               f"Duplicate rule_id found: {', '.join(duplicates)}",
+                               [f"{rid} appears {ids.count(rid)} times" for rid in duplicates]))
     else:
-        report.add(CheckResult("rule_id 唯一", "PASS", f"全部 {len(ids)} 个 rule_id 唯一"))
+        report.add(CheckResult("Unique rule_id", "PASS", f"All {len(ids)} rule_id values are unique"))
 
     # 1.3 origin 合法性
     bad_origins = [r["rule_id"] for r in rows if r.get("origin") not in VALID_ORIGINS]
     if bad_origins:
-        report.add(CheckResult("origin 合法", "FAIL",
-                               f"{len(bad_origins)} 条 origin 值非法",
-                               [f"{rid} → {next(r.get('origin','?') for r in rows if r['rule_id']==rid)}"
+        report.add(CheckResult("Valid origin", "FAIL",
+                               f"{len(bad_origins)} rules have invalid origin values",
+                               [f"{rid} -> {next(r.get('origin','?') for r in rows if r['rule_id']==rid)}"
                                 for rid in bad_origins[:10]]))
     else:
-        report.add(CheckResult("origin 合法", "PASS", "全部 origin 值合法"))
+        report.add(CheckResult("Valid origin", "PASS", "All origin values are valid"))
 
     # 1.4 status 合法性
     bad_status = [r["rule_id"] for r in rows if r.get("status") not in VALID_STATUSES]
     if bad_status:
-        report.add(CheckResult("status 合法", "FAIL",
-                               f"{len(bad_status)} 条 status 值非法",
+        report.add(CheckResult("Valid status", "FAIL",
+                               f"{len(bad_status)} rules have invalid status values",
                                bad_status[:10]))
     else:
-        report.add(CheckResult("status 合法", "PASS", "全部 status 值合法"))
+        report.add(CheckResult("Valid status", "PASS", "All status values are valid"))
 
     # 1.5 数值非负
     negative = []
@@ -446,31 +459,31 @@ def check_data_integrity(rows: list[dict], csv_path: Path) -> DimensionReport:
             if r[f] < 0:
                 negative.append(f"{r['rule_id']}.{f}={r[f]}")
     if negative:
-        report.add(CheckResult("数值非负", "FAIL", f"发现负值", negative[:10]))
+        report.add(CheckResult("Non-Negative Counters", "FAIL", "Negative values found", negative[:10]))
     else:
-        report.add(CheckResult("数值非负", "PASS", "全部数值字段非负"))
+        report.add(CheckResult("Non-Negative Counters", "PASS", "All counter fields are non-negative"))
 
     # 1.6 err ≤ vio（逻辑约束）
     err_gt_vio = [f"{r['rule_id']}(err:{r['err']} > vio:{r['vio']})"
                   for r in rows if r["err"] > r["vio"]]
     if err_gt_vio:
-        report.add(CheckResult("err ≤ vio", "FAIL",
-                               "err 是 vio 的子集，不应大于 vio",
+        report.add(CheckResult("err <= vio", "FAIL",
+                               "err is a subset of vio and must not exceed vio",
                                err_gt_vio[:10]))
     else:
-        report.add(CheckResult("err ≤ vio", "PASS", "全部记录 err ≤ vio"))
+        report.add(CheckResult("err <= vio", "PASS", "All rows satisfy err <= vio"))
 
     # 1.7 origin=error 的初始值检查
     error_no_vio = [r["rule_id"] for r in rows
                     if r.get("origin") == "error" and r["vio"] == 0 and r["err"] == 0
                     and r["status"] != "archived"]
     if error_no_vio:
-        report.add(CheckResult("error 初始值", "WARN",
-                               f"{len(error_no_vio)} 条 origin=error 但 vio=0 err=0（初始值可能未正确设置）",
+        report.add(CheckResult("error Baseline", "WARN",
+                               f"{len(error_no_vio)} origin=error rules still have vio=0 and err=0 (baseline may be incorrect)",
                                error_no_vio[:10]))
     else:
-        report.add(CheckResult("error 初始值", "PASS",
-                               "全部 origin=error 的规则都有 vio/err 初始值"))
+        report.add(CheckResult("error Baseline", "PASS",
+                               "All origin=error rules have non-zero initial vio/err history"))
 
     # 1.8 平台标签检查（仅 S- 规则要求强平台标签）
     weak_platform_tags = []
@@ -481,11 +494,11 @@ def check_data_integrity(rows: list[dict], csv_path: Path) -> DimensionReport:
         if platform == PLATFORM_ALL:
             weak_platform_tags.append(r["rule_id"])
     if weak_platform_tags:
-        report.add(CheckResult("平台标签完整", "WARN",
-                               f"{len(weak_platform_tags)} 条平台教训仍为 platform=all，建议指定 claude/gemini/codex/cursor 以实现解耦",
+        report.add(CheckResult("Platform Tag Completeness", "WARN",
+                               f"{len(weak_platform_tags)} platform lessons still use platform=all; specify claude/gemini/codex/cursor",
                                weak_platform_tags[:10]))
     else:
-        report.add(CheckResult("平台标签完整", "PASS", "全部平台教训均有明确平台标签"))
+        report.add(CheckResult("Platform Tag Completeness", "PASS", "All platform lessons have explicit platform tags"))
 
     return report
 
@@ -495,12 +508,12 @@ def check_data_integrity(rows: list[dict], csv_path: Path) -> DimensionReport:
 # ══════════════════════════════════════════════════════════
 
 def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, root: Path) -> DimensionReport:
-    report = DimensionReport("EVOLVE.md 一致性", "CSV 与 EVOLVE.md 之间的数据同步状态")
+    report = DimensionReport("EVOLVE.md Consistency", "Sync consistency between CSV and EVOLVE.md")
 
     if not evolve_content:
-        report.add(CheckResult("EVOLVE.md 存在", "FAIL", f"{evolve_path} 不存在"))
+        report.add(CheckResult("EVOLVE.md Presence", "FAIL", f"{evolve_path} is missing"))
         return report
-    report.add(CheckResult("EVOLVE.md 存在", "PASS", "EVOLVE.md 存在"))
+    report.add(CheckResult("EVOLVE.md Presence", "PASS", "EVOLVE.md exists"))
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
 
@@ -512,13 +525,13 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
             missing_in_md.append(r["rule_id"])
 
     if missing_in_md:
-        report.add(CheckResult("规则覆盖率", "WARN",
-                               f"{len(missing_in_md)}/{len(active_rows)} 条 active 规则在 EVOLVE.md 中未找到",
+        report.add(CheckResult("Rule Coverage", "WARN",
+                               f"{len(missing_in_md)}/{len(active_rows)} active rules are missing in EVOLVE.md",
                                missing_in_md[:10]))
     else:
         total = len(active_rows)
-        report.add(CheckResult("规则覆盖率", "PASS",
-                               f"全部 {total} 条 active 规则在 EVOLVE.md 中有对应"))
+        report.add(CheckResult("Rule Coverage", "PASS",
+                               f"All {total} active rules are present in EVOLVE.md"))
 
     # 2.2 内联标签同步：EVOLVE.md 中的 {hit:N vio:N err:N} 是否与 CSV 一致
     out_of_sync = []
@@ -532,15 +545,15 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
             md_hit, md_vio, md_err = int(tag_match.group(1)), int(tag_match.group(2)), int(tag_match.group(3))
             if md_hit != r["hit"] or md_vio != r["vio"] or md_err != r["err"]:
                 out_of_sync.append(
-                    f"{r['rule_id']}: MD({md_hit}/{md_vio}/{md_err}) ≠ CSV({r['hit']}/{r['vio']}/{r['err']})"
+                    f"{r['rule_id']}: MD({md_hit}/{md_vio}/{md_err}) != CSV({r['hit']}/{r['vio']}/{r['err']})"
                 )
 
     if out_of_sync:
-        report.add(CheckResult("内联标签同步", "WARN",
-                               f"{len(out_of_sync)} 条内联标签与 CSV 不一致（需运行 sync）",
+        report.add(CheckResult("Inline Tag Sync", "WARN",
+                               f"{len(out_of_sync)} inline tags differ from CSV (run sync)",
                                out_of_sync[:10]))
     else:
-        report.add(CheckResult("内联标签同步", "PASS", "内联标签与 CSV 数据一致"))
+        report.add(CheckResult("Inline Tag Sync", "PASS", "Inline tags match CSV data"))
 
     # 2.3 TL;DR 一致性：高频违反规则是否出现在 TL;DR 中
     should_in_tldr = [
@@ -557,12 +570,12 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
     missing_tldr = [r["rule_id"] for r in should_in_tldr
                     if r["rule_id"] not in tldr_text]
     if missing_tldr:
-        report.add(CheckResult("TL;DR 同步", "WARN",
-                               f"{len(missing_tldr)} 条高频违反规则未出现在 TL;DR（需运行 sync）",
+        report.add(CheckResult("TL;DR Sync", "WARN",
+                               f"{len(missing_tldr)} frequently violated rules are missing from TL;DR (run sync)",
                                missing_tldr[:10]))
     else:
-        report.add(CheckResult("TL;DR 同步", "PASS",
-                               "高频违反规则已在 TL;DR 中标注" if should_in_tldr else "当前无需 TL;DR 警告"))
+        report.add(CheckResult("TL;DR Sync", "PASS",
+                               "Frequently violated rules are present in TL;DR" if should_in_tldr else "No TL;DR warnings needed"))
 
     # 2.4 平台文件自动同步一致性
     config_map = load_platform_target_map(root)
@@ -570,9 +583,9 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
     platforms = discover_sync_platforms(root, rows, config_map, marker_map)
 
     if not platforms:
-        report.add(CheckResult("平台文件覆盖", "PASS", "未发现需要同步的平台文件"))
-        report.add(CheckResult("平台自动区块", "PASS", "无平台目标，无需区块校验"))
-        report.add(CheckResult("平台 Digest 新鲜度", "PASS", "无平台目标，无需 digest 校验"))
+        report.add(CheckResult("Platform File Coverage", "PASS", "No platform files require sync"))
+        report.add(CheckResult("Platform Auto Blocks", "PASS", "No platform targets; block check skipped"))
+        report.add(CheckResult("Platform Digest Freshness", "PASS", "No platform targets; digest check skipped"))
         return report
 
     missing_files = []
@@ -601,38 +614,38 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
 
     if missing_files:
         report.add(CheckResult(
-            "平台文件覆盖",
+            "Platform File Coverage",
             "WARN",
-            f"{len(missing_files)}/{len(platforms)} 个平台目标缺少文件（需运行 sync）",
+            f"{len(missing_files)}/{len(platforms)} platform targets are missing files (run sync)",
             missing_files[:10],
         ))
     else:
         report.add(CheckResult(
-            "平台文件覆盖",
+            "Platform File Coverage",
             "PASS",
-            f"全部 {len(platforms)} 个平台目标均有对应文件",
+            f"All {len(platforms)} platform targets have files",
         ))
 
     block_issues = missing_blocks + missing_digest
     if block_issues:
         report.add(CheckResult(
-            "平台自动区块",
+            "Platform Auto Blocks",
             "WARN",
-            f"{len(block_issues)} 个平台文件缺少有效自动区块（需运行 sync）",
+            f"{len(block_issues)} platform files are missing valid auto-sync blocks (run sync)",
             block_issues[:10],
         ))
     else:
-        report.add(CheckResult("平台自动区块", "PASS", "全部平台文件包含有效自动区块"))
+        report.add(CheckResult("Platform Auto Blocks", "PASS", "All platform files include valid auto-sync blocks"))
 
     if stale_digest:
         report.add(CheckResult(
-            "平台 Digest 新鲜度",
+            "Platform Digest Freshness",
             "WARN",
-            f"{len(stale_digest)} 个平台文件 digest 过期（需运行 sync）",
+            f"{len(stale_digest)} platform file digests are stale (run sync)",
             stale_digest[:10],
         ))
     else:
-        report.add(CheckResult("平台 Digest 新鲜度", "PASS", "平台文件 digest 与当前数据一致"))
+        report.add(CheckResult("Platform Digest Freshness", "PASS", "Platform file digests match current data"))
 
     return report
 
@@ -642,20 +655,20 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
 # ══════════════════════════════════════════════════════════
 
 def check_structure(rows: list[dict]) -> DimensionReport:
-    report = DimensionReport("体系结构", "规则数量、分布均衡度、来源多样性")
+    report = DimensionReport("Structure", "Rule count, distribution balance, and source diversity")
 
     active_rows = [r for r in rows if r["status"] != "archived"]
     total = len(active_rows)
 
     # 3.1 规则总数
     if total < RULES_MIN:
-        report.add(CheckResult("规则总数", "WARN",
-                               f"仅 {total} 条活跃规则（< {RULES_MIN}），经验沉淀不足"))
+        report.add(CheckResult("Rule Count", "WARN",
+                               f"Only {total} active rules (< {RULES_MIN}); knowledge base is sparse"))
     elif total > RULES_MAX:
-        report.add(CheckResult("规则总数", "WARN",
-                               f"{total} 条活跃规则（> {RULES_MAX}），维护负担较重，建议审查归档"))
+        report.add(CheckResult("Rule Count", "WARN",
+                               f"{total} active rules (> {RULES_MAX}); maintenance overhead is high"))
     else:
-        report.add(CheckResult("规则总数", "PASS", f"{total} 条活跃规则，数量适中"))
+        report.add(CheckResult("Rule Count", "PASS", f"{total} active rules; count is in a healthy range"))
 
     if total == 0:
         return report
@@ -670,14 +683,14 @@ def check_structure(rows: list[dict]) -> DimensionReport:
     max_scope = max(top_scopes.items(), key=lambda x: x[1])
     concentration = max_scope[1] / total
     if concentration > SCOPE_CONCENTRATION:
-        report.add(CheckResult("scope 分布", "WARN",
-                               f"'{max_scope[0]}' 占比 {concentration:.0%}（> {SCOPE_CONCENTRATION:.0%}），经验过度集中",
-                               [f"{k}: {v} 条 ({v/total:.0%})" for k, v in
+        report.add(CheckResult("Scope Distribution", "WARN",
+                               f"'{max_scope[0]}' accounts for {concentration:.0%} (> {SCOPE_CONCENTRATION:.0%}); over-concentrated",
+                               [f"{k}: {v} rules ({v/total:.0%})" for k, v in
                                 sorted(top_scopes.items(), key=lambda x: -x[1])]))
     else:
-        report.add(CheckResult("scope 分布", "PASS",
-                               f"最大 scope '{max_scope[0]}' 占 {concentration:.0%}，分布均衡",
-                               [f"{k}: {v} 条" for k, v in
+        report.add(CheckResult("Scope Distribution", "PASS",
+                               f"Largest scope '{max_scope[0]}' is {concentration:.0%}; distribution is balanced",
+                               [f"{k}: {v} rules" for k, v in
                                 sorted(top_scopes.items(), key=lambda x: -x[1])]))
 
     # 3.3 origin 分布
@@ -690,20 +703,20 @@ def check_structure(rows: list[dict]) -> DimensionReport:
     preventive_pct = origin_dist.get("preventive", 0) / total
     imported_pct = origin_dist.get("imported", 0) / total
 
-    dist_details = [f"{k}: {v} 条 ({v/total:.0%})" for k, v in
+    dist_details = [f"{k}: {v} rules ({v/total:.0%})" for k, v in
                     sorted(origin_dist.items(), key=lambda x: -x[1])]
 
     if error_pct == 1.0:
-        report.add(CheckResult("origin 分布", "WARN",
-                               "全部规则源于实际错误，缺少预防性经验",
+        report.add(CheckResult("Origin Distribution", "WARN",
+                               "All rules come from errors; preventive knowledge is missing",
                                dist_details))
     elif imported_pct > 0.7:
-        report.add(CheckResult("origin 分布", "WARN",
-                               f"imported 占 {imported_pct:.0%}，大量外部导入但缺少实战沉淀",
+        report.add(CheckResult("Origin Distribution", "WARN",
+                               f"Imported rules account for {imported_pct:.0%}; practical local learnings are limited",
                                dist_details))
     else:
-        report.add(CheckResult("origin 分布", "PASS",
-                               "来源多样性良好",
+        report.add(CheckResult("Origin Distribution", "PASS",
+                               "Origin diversity looks healthy",
                                dist_details))
 
     # 3.4 status 分布
@@ -715,37 +728,37 @@ def check_structure(rows: list[dict]) -> DimensionReport:
     review_count = status_dist.get("review", 0)
     total_all = len(rows)
 
-    status_details = [f"{k}: {v} 条" for k, v in sorted(status_dist.items())]
+    status_details = [f"{k}: {v} rules" for k, v in sorted(status_dist.items())]
 
     if total_all > 0 and archived_count / total_all > 0.5:
-        report.add(CheckResult("status 分布", "WARN",
-                               f"archived 占 {archived_count/total_all:.0%}，超半数规则已淘汰",
+        report.add(CheckResult("Status Distribution", "WARN",
+                               f"archived accounts for {archived_count/total_all:.0%}; more than half are retired",
                                status_details))
     elif review_count > 5:
-        report.add(CheckResult("status 分布", "WARN",
-                               f"{review_count} 条处于 review 状态，积压较多",
+        report.add(CheckResult("Status Distribution", "WARN",
+                               f"{review_count} rules are in review; backlog is high",
                                status_details))
     else:
-        report.add(CheckResult("status 分布", "PASS", "状态分布正常", status_details))
+        report.add(CheckResult("Status Distribution", "PASS", "Status distribution is healthy", status_details))
 
     # 3.5 平台教训解耦情况
     platform_rows = [r for r in active_rows if is_platform_rule(r)]
     if not platform_rows:
-        report.add(CheckResult("平台解耦", "PASS", "当前无平台教训（S-xxx）"))
+        report.add(CheckResult("Platform Decoupling", "PASS", "No platform lessons (S-xxx) found"))
     else:
         platform_dist: dict[str, int] = {}
         for r in platform_rows:
             p = canonical_platform(r.get("platform", PLATFORM_ALL))
             platform_dist[p] = platform_dist.get(p, 0) + 1
-        details = [f"{k}: {v} 条" for k, v in sorted(platform_dist.items(), key=lambda x: (-x[1], x[0]))]
+        details = [f"{k}: {v} rules" for k, v in sorted(platform_dist.items(), key=lambda x: (-x[1], x[0]))]
         weak_count = platform_dist.get(PLATFORM_ALL, 0)
         if weak_count > 0:
-            report.add(CheckResult("平台解耦", "WARN",
-                                   f"{weak_count}/{len(platform_rows)} 条平台教训使用 platform=all，尚未完全解耦",
+            report.add(CheckResult("Platform Decoupling", "WARN",
+                                   f"{weak_count}/{len(platform_rows)} platform lessons still use platform=all",
                                    details))
         else:
-            report.add(CheckResult("平台解耦", "PASS",
-                                   f"平台教训已按 platform 解耦（{len(platform_dist)} 个平台）",
+            report.add(CheckResult("Platform Decoupling", "PASS",
+                                   f"Platform lessons are decoupled by platform ({len(platform_dist)} platforms)",
                                    details))
 
     return report
@@ -756,11 +769,11 @@ def check_structure(rows: list[dict]) -> DimensionReport:
 # ══════════════════════════════════════════════════════════
 
 def check_freshness(rows: list[dict]) -> DimensionReport:
-    report = DimensionReport("审计活跃度", "审计覆盖率、僵尸规则、积压项")
+    report = DimensionReport("Freshness", "Audit coverage, stale rules, and review backlog")
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
     if not active_rows:
-        report.add(CheckResult("活跃规则", "WARN", "无活跃规则"))
+        report.add(CheckResult("Active Rules", "WARN", "No active rules found"))
         return report
 
     today = date.today()
@@ -772,19 +785,19 @@ def check_freshness(rows: list[dict]) -> DimensionReport:
             last = date.fromisoformat(r["last_reviewed"])
             days = (today - last).days
             if days > ZOMBIE_DAYS:
-                zombies.append(f"{r['rule_id']}（{days} 天未审计）")
+                zombies.append(f"{r['rule_id']} ({days} days since last review)")
         except (ValueError, KeyError):
-            zombies.append(f"{r['rule_id']}（无有效审计日期）")
+            zombies.append(f"{r['rule_id']} (invalid or missing review date)")
 
     if zombies:
         pct = len(zombies) / len(active_rows)
         level = "FAIL" if pct > 0.5 else "WARN"
-        report.add(CheckResult("僵尸规则", level,
-                               f"{len(zombies)}/{len(active_rows)} 条超过 {ZOMBIE_DAYS} 天未审计",
+        report.add(CheckResult("Zombie Rules", level,
+                               f"{len(zombies)}/{len(active_rows)} rules exceed {ZOMBIE_DAYS} days without review",
                                zombies[:10]))
     else:
-        report.add(CheckResult("僵尸规则", "PASS",
-                               f"全部 {len(active_rows)} 条活跃规则均在 {ZOMBIE_DAYS} 天内被审计"))
+        report.add(CheckResult("Zombie Rules", "PASS",
+                               f"All {len(active_rows)} active rules were reviewed within {ZOMBIE_DAYS} days"))
 
     # 4.2 最近 7 天审计覆盖率
     recent_7 = 0
@@ -798,11 +811,11 @@ def check_freshness(rows: list[dict]) -> DimensionReport:
 
     coverage_7 = recent_7 / len(active_rows) if active_rows else 0
     if coverage_7 < 0.3:
-        report.add(CheckResult("7 天覆盖率", "WARN",
-                               f"最近 7 天仅审计 {recent_7}/{len(active_rows)} 条（{coverage_7:.0%}）"))
+        report.add(CheckResult("7-Day Coverage", "WARN",
+                               f"Only {recent_7}/{len(active_rows)} rules reviewed in last 7 days ({coverage_7:.0%})"))
     else:
-        report.add(CheckResult("7 天覆盖率", "PASS",
-                               f"最近 7 天审计 {recent_7}/{len(active_rows)} 条（{coverage_7:.0%}）"))
+        report.add(CheckResult("7-Day Coverage", "PASS",
+                               f"{recent_7}/{len(active_rows)} rules reviewed in last 7 days ({coverage_7:.0%})"))
 
     # 4.3 review 积压
     review_rows = [r for r in rows if r["status"] == "review"]
@@ -812,18 +825,18 @@ def check_freshness(rows: list[dict]) -> DimensionReport:
             last = date.fromisoformat(r["last_reviewed"])
             days = (today - last).days
             if days > REVIEW_STALE_DAYS:
-                stale_reviews.append(f"{r['rule_id']}（review 已 {days} 天）")
+                stale_reviews.append(f"{r['rule_id']} (review pending for {days} days)")
         except (ValueError, KeyError):
-            stale_reviews.append(f"{r['rule_id']}（无有效日期）")
+            stale_reviews.append(f"{r['rule_id']} (invalid or missing date)")
 
     if stale_reviews:
-        report.add(CheckResult("review 积压", "WARN",
-                               f"{len(stale_reviews)} 条 review 超过 {REVIEW_STALE_DAYS} 天未处理",
+        report.add(CheckResult("Review Backlog", "WARN",
+                               f"{len(stale_reviews)} review items exceed {REVIEW_STALE_DAYS} days",
                                stale_reviews[:10]))
     else:
         pending = len(review_rows)
-        report.add(CheckResult("review 积压", "PASS",
-                               f"无过期 review（当前 {pending} 条待审查）" if pending else "无待审查项"))
+        report.add(CheckResult("Review Backlog", "PASS",
+                               f"No stale review items (current pending: {pending})" if pending else "No items pending review"))
 
     return report
 
@@ -833,11 +846,11 @@ def check_freshness(rows: list[dict]) -> DimensionReport:
 # ══════════════════════════════════════════════════════════
 
 def check_quality(rows: list[dict]) -> DimensionReport:
-    report = DimensionReport("质量指标", "遵守率、高危/难执行/低价值占比")
+    report = DimensionReport("Quality", "Compliance, high-risk/hard-to-follow/low-value ratios")
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
     if not active_rows:
-        report.add(CheckResult("活跃规则", "WARN", "无活跃规则"))
+        report.add(CheckResult("Active Rules", "WARN", "No active rules found"))
         return report
 
     # 5.1 整体加权遵守率
@@ -847,10 +860,10 @@ def check_quality(rows: list[dict]) -> DimensionReport:
     if total_actions > 0:
         overall_cr = total_hit / total_actions
         level = "PASS" if overall_cr >= 0.8 else ("WARN" if overall_cr >= 0.6 else "FAIL")
-        report.add(CheckResult("整体遵守率", level,
-                               f"{overall_cr:.0%}（hit:{total_hit} vio:{total_vio}）"))
+        report.add(CheckResult("Overall Compliance", level,
+                               f"{overall_cr:.0%} (hit:{total_hit} vio:{total_vio})"))
     else:
-        report.add(CheckResult("整体遵守率", "WARN", "无审计数据，无法计算遵守率"))
+        report.add(CheckResult("Overall Compliance", "WARN", "No audit data; compliance cannot be calculated"))
 
     # 5.2 高危规则占比
     high_danger = [
@@ -861,39 +874,39 @@ def check_quality(rows: list[dict]) -> DimensionReport:
     hd_pct = len(high_danger) / len(active_rows)
     if high_danger:
         level = "FAIL" if hd_pct > 0.2 else "WARN"
-        report.add(CheckResult("高危规则", level,
-                               f"{len(high_danger)} 条高危（占 {hd_pct:.0%}）",
-                               [f"{r['rule_id']}（危险度 {danger_rate(r):.0%}）" for r in high_danger]))
+        report.add(CheckResult("High-Risk Rules", level,
+                               f"{len(high_danger)} high-risk rules ({hd_pct:.0%})",
+                               [f"{r['rule_id']} (danger {danger_rate(r):.0%})" for r in high_danger]))
     else:
-        report.add(CheckResult("高危规则", "PASS", "无高危规则"))
+        report.add(CheckResult("High-Risk Rules", "PASS", "No high-risk rules"))
 
     # 5.3 难执行规则占比
     hard = [r for r in active_rows if r["hit"] >= 3 and r["vio"] >= 3]
     if hard:
-        report.add(CheckResult("难执行规则", "WARN",
-                               f"{len(hard)} 条难执行（hit≥3 且 vio≥3），建议重写",
-                               [f"{r['rule_id']}（遵守率 {compliance_rate(r):.0%}）" for r in hard]))
+        report.add(CheckResult("Hard-to-Follow Rules", "WARN",
+                               f"{len(hard)} hard-to-follow rules (hit>=3 and vio>=3); consider rewrite",
+                               [f"{r['rule_id']} (compliance {compliance_rate(r):.0%})" for r in hard]))
     else:
-        report.add(CheckResult("难执行规则", "PASS", "无难执行规则"))
+        report.add(CheckResult("Hard-to-Follow Rules", "PASS", "No hard-to-follow rules"))
 
     # 5.4 低价值嫌疑占比
     low_value = [r for r in active_rows
                  if r["hit"] >= 8 and r["vio"] == 0 and r["err"] == 0
                  and r.get("origin") != "error"]
     if low_value:
-        report.add(CheckResult("低价值嫌疑", "WARN",
-                               f"{len(low_value)} 条低价值嫌疑（origin≠error, hit≥8, vio=0）",
-                               [f"{r['rule_id']}（{r.get('origin','?')}, hit:{r['hit']}）" for r in low_value]))
+        report.add(CheckResult("Low-Value Candidates", "WARN",
+                               f"{len(low_value)} low-value candidates (origin!=error, hit>=8, vio=0)",
+                               [f"{r['rule_id']} ({r.get('origin','?')}, hit:{r['hit']})" for r in low_value]))
     else:
-        report.add(CheckResult("低价值嫌疑", "PASS", "无低价值嫌疑"))
+        report.add(CheckResult("Low-Value Candidates", "PASS", "No low-value candidates"))
 
     # 5.5 protected 确认率
     protected = [r for r in rows if r["status"] == "protected"]
     total_non_archived = len([r for r in rows if r["status"] != "archived"])
     if total_non_archived > 0:
         prot_pct = len(protected) / total_non_archived
-        report.add(CheckResult("protected 比例", "PASS",
-                               f"{len(protected)}/{total_non_archived} 条（{prot_pct:.0%}）经过用户确认"))
+        report.add(CheckResult("Protected Ratio", "PASS",
+                               f"{len(protected)}/{total_non_archived} ({prot_pct:.0%}) confirmed by user"))
 
     return report
 
@@ -903,7 +916,7 @@ def check_quality(rows: list[dict]) -> DimensionReport:
 # ══════════════════════════════════════════════════════════
 
 def check_anti_corruption(rows: list[dict], evolve_content: str) -> DimensionReport:
-    report = DimensionReport("防腐检查", "全零规则、孤儿规则、逻辑异常")
+    report = DimensionReport("Anti-Corruption", "Zero-touch rules, orphan rules, and logical anomalies")
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
 
@@ -912,11 +925,11 @@ def check_anti_corruption(rows: list[dict], evolve_content: str) -> DimensionRep
                   if r["hit"] == 0 and r["vio"] == 0 and r["err"] == 0
                   and r["skip"] == 0 and r["auto_skip"] == 0]
     if zero_rules:
-        report.add(CheckResult("全零规则", "WARN",
-                               f"{len(zero_rules)} 条从未被触及（hit/vio/err/skip 全为 0）",
+        report.add(CheckResult("Zero-Touch Rules", "WARN",
+                               f"{len(zero_rules)} rules were never touched (hit/vio/err/skip all zero)",
                                zero_rules[:10]))
     else:
-        report.add(CheckResult("全零规则", "PASS", "无全零规则，全部规则已被审计触及"))
+        report.add(CheckResult("Zero-Touch Rules", "PASS", "No zero-touch rules; all rules have audit activity"))
 
     # 6.2 孤儿规则：CSV 中 active 但 EVOLVE.md 中已不存在
     if evolve_content:
@@ -926,41 +939,41 @@ def check_anti_corruption(rows: list[dict], evolve_content: str) -> DimensionRep
             if not re.search(rf"\[{rule_id}\]", evolve_content):
                 orphans.append(r["rule_id"])
         if orphans:
-            report.add(CheckResult("孤儿规则", "WARN",
-                                   f"{len(orphans)} 条 active 规则在 EVOLVE.md 中未找到（可能被手动删除）",
+            report.add(CheckResult("Orphan Rules", "WARN",
+                                   f"{len(orphans)} active rules are missing in EVOLVE.md (possibly manually removed)",
                                    orphans[:10]))
         else:
-            report.add(CheckResult("孤儿规则", "PASS", "无孤儿规则"))
+            report.add(CheckResult("Orphan Rules", "PASS", "No orphan rules"))
     else:
-        report.add(CheckResult("孤儿规则", "WARN", "EVOLVE.md 不存在，无法检查"))
+        report.add(CheckResult("Orphan Rules", "WARN", "EVOLVE.md is missing; orphan check skipped"))
 
     # 6.3 err > vio 异常（与数据完整性有交叉，这里侧重"腐化"视角）
     corrupted = [f"{r['rule_id']}(err:{r['err']} vio:{r['vio']})"
                  for r in rows if r["err"] > r["vio"]]
     if corrupted:
-        report.add(CheckResult("数据腐化", "FAIL",
-                               f"{len(corrupted)} 条 err > vio（数据逻辑矛盾）",
+        report.add(CheckResult("Data Corruption", "FAIL",
+                               f"{len(corrupted)} rows have err > vio (logical inconsistency)",
                                corrupted[:10]))
     else:
-        report.add(CheckResult("数据腐化", "PASS", "无逻辑矛盾数据"))
+        report.add(CheckResult("Data Corruption", "PASS", "No logical inconsistency found"))
 
     # 6.4 scope 为空
     empty_scope = [r["rule_id"] for r in active_rows if not r.get("scope", "").strip()]
     if empty_scope:
-        report.add(CheckResult("空 scope", "WARN",
-                               f"{len(empty_scope)} 条规则缺少 scope 标签",
+        report.add(CheckResult("Empty Scope", "WARN",
+                               f"{len(empty_scope)} rules are missing scope tags",
                                empty_scope[:10]))
     else:
-        report.add(CheckResult("空 scope", "PASS", "全部规则都有 scope 标签"))
+        report.add(CheckResult("Empty Scope", "PASS", "All rules have scope tags"))
 
     # 6.5 title 为空
     empty_title = [r["rule_id"] for r in active_rows if not r.get("title", "").strip()]
     if empty_title:
-        report.add(CheckResult("空 title", "WARN",
-                               f"{len(empty_title)} 条规则缺少 title",
+        report.add(CheckResult("Empty Title", "WARN",
+                               f"{len(empty_title)} rules are missing title",
                                empty_title[:10]))
     else:
-        report.add(CheckResult("空 title", "PASS", "全部规则都有 title"))
+        report.add(CheckResult("Empty Title", "PASS", "All rules have title"))
 
     return report
 
@@ -969,7 +982,7 @@ def check_anti_corruption(rows: list[dict], evolve_content: str) -> DimensionRep
 #  报告汇总与输出
 # ══════════════════════════════════════════════════════════
 
-LEVEL_ICON = {"PASS": "✅", "WARN": "⚠️", "FAIL": "❌"}
+LEVEL_ICON = {"PASS": "[PASS]", "WARN": "[WARN]", "FAIL": "[FAIL]"}
 LEVEL_WEIGHT = {"PASS": 1.0, "WARN": 0.5, "FAIL": 0.0}
 
 
@@ -986,59 +999,59 @@ def compute_score(dimensions: list[DimensionReport]) -> float:
 
 def score_grade(score: float) -> str:
     if score >= 90:
-        return "A（优秀）"
+        return "A (Excellent)"
     elif score >= 75:
-        return "B（良好）"
+        return "B (Good)"
     elif score >= 60:
-        return "C（及格）"
+        return "C (Fair)"
     elif score >= 40:
-        return "D（较差）"
+        return "D (Poor)"
     else:
-        return "F（危险）"
+        return "F (Critical)"
 
 
 def print_text_report(dimensions: list[DimensionReport], score: float):
     """输出文本格式报告"""
     print("=" * 64)
-    print("  经验体系健康度检查报告")
+    print("  Evolve Health Check Report")
     print("=" * 64)
-    print(f"\n  总评分：{score:.0f}/100  {score_grade(score)}\n")
+    print(f"\n  Overall Score: {score:.0f}/100  {score_grade(score)}\n")
 
     for dim in dimensions:
         header = f"  [{dim.dimension}] {dim.description}"
-        print(f"\n{'─' * 64}")
+        print(f"\n{'-' * 64}")
         print(header)
         print(f"  {dim.pass_count} PASS / {dim.warn_count} WARN / {dim.fail_count} FAIL")
-        print(f"{'─' * 64}")
+        print(f"{'-' * 64}")
 
         for check in dim.checks:
             icon = LEVEL_ICON[check.level]
-            print(f"  {icon} {check.name}：{check.message}")
+            print(f"  {icon} {check.name}: {check.message}")
             for detail in check.details[:5]:
-                print(f"      → {detail}")
+                print(f"      -> {detail}")
             if len(check.details) > 5:
-                print(f"      ... 还有 {len(check.details) - 5} 条")
+                print(f"      ... and {len(check.details) - 5} more")
 
     # 汇总建议
     all_fails = [(dim.dimension, c) for dim in dimensions for c in dim.checks if c.level == "FAIL"]
     all_warns = [(dim.dimension, c) for dim in dimensions for c in dim.checks if c.level == "WARN"]
 
     if all_fails or all_warns:
-        print(f"\n{'═' * 64}")
-        print("  修复建议")
-        print(f"{'═' * 64}")
+        print(f"\n{'=' * 64}")
+        print("  Suggested Fixes")
+        print(f"{'=' * 64}")
         if all_fails:
-            print("\n  [必须修复]")
+            print("\n  [Must Fix]")
             for dim_name, check in all_fails:
-                print(f"    ❌ [{dim_name}] {check.name}：{check.message}")
+                print(f"    [FAIL] [{dim_name}] {check.name}: {check.message}")
         if all_warns:
-            print("\n  [建议关注]")
+            print("\n  [Needs Attention]")
             for dim_name, check in all_warns:
-                print(f"    ⚠️ [{dim_name}] {check.name}：{check.message}")
+                print(f"    [WARN] [{dim_name}] {check.name}: {check.message}")
 
-    print(f"\n{'═' * 64}")
-    print(f"  检查完成，共 {sum(len(d.checks) for d in dimensions)} 项检查")
-    print(f"{'═' * 64}\n")
+    print(f"\n{'=' * 64}")
+    print(f"  Completed: {sum(len(d.checks) for d in dimensions)} checks")
+    print(f"{'=' * 64}\n")
 
 
 def print_json_report(dimensions: list[DimensionReport], score: float):
@@ -1056,7 +1069,7 @@ def print_json_report(dimensions: list[DimensionReport], score: float):
             for dim in dimensions for c in dim.checks if c.level == "WARN"
         ],
     }
-    print(json.dumps(output, ensure_ascii=False, indent=2))
+    print(json.dumps(output, ensure_ascii=True, indent=2))
 
 
 # ── 入口 ──

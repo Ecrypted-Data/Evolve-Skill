@@ -1,33 +1,33 @@
 ﻿#!/usr/bin/env python3
 """
-审计同步脚本 - Evolve-Skill 自动化工具
+Audit sync utility for Evolve-Skill.
 
-功能：
-  init    - 初始化 evolve/audit.csv（如不存在）
-  scopes  - 列出所有有效的 scope 类型
-  filter  - 按 scope / platform 筛选相关经验条目（精简输出，节省上下文）
-  score   - 一行式批量打分，未打分但 filter 匹配的条目自动 auto_skip+1
-  sync    - 从 audit.csv 同步指标到 EVOLVE.md，并自动同步平台文件区块
-  sync_platform - 仅同步平台文件区块（不改写 EVOLVE.md）
-  report  - 输出审计报告（推导指标 + 异常检测 + 待审查项）
-  promote - 输出晋升建议（平台教训 → 用户级配置，可按平台过滤）
+Commands:
+  init          Initialize evolve/audit.csv if missing
+  scopes        List available scope keywords
+  filter        Filter rules by scope/platform
+  score         One-line scoring, unmatched filtered rules get auto_skip+1
+  sync          Sync metrics to EVOLVE.md and platform files
+  sync_platform Sync platform files only (does not modify EVOLVE.md)
+  report        Print audit report with derived metrics and anomalies
+  promote       Print promotion suggestions (platform lessons -> user config)
 
-用法：
+Usage:
   python audit_sync.py <command> [args] [--project-root <path>] [--platform <name>]
 
-  --project-root  项目根目录路径（默认：当前工作目录）
-  --platform      平台标签（如 claude/gemini/codex/cursor），用于筛选平台教训（S-xxx）
-  --no-platform-sync  仅用于 sync：跳过平台文件同步
+  --project-root      Project root path (default: current working directory)
+  --platform          Platform label (claude/gemini/codex/cursor)
+  --no-platform-sync  For sync only: skip platform file sync
 
-审计辅助工作流（AI 复盘时使用）：
-  1. scopes                          → 查看有哪些 scope
-  2. filter "前端,React" --platform codex → 筛选相关条目
-  3. score "R-001:+hit R-003:+vio+err" --scope "前端,React" --platform codex
-                                        → 一行打分（仅 codex 平台教训会被纳入平台筛选）
-  4. sync                            → 同步到 EVOLVE.md + 平台文件
+Suggested workflow:
+  1. scopes
+  2. filter "frontend,react" --platform codex
+  3. score "R-001:+hit R-003:+vio+err" --scope "frontend,react" --platform codex
+  4. sync
 """
 
 import csv
+import builtins
 import hashlib
 import json
 import re
@@ -44,6 +44,18 @@ def _configure_stream_utf8(stream: object) -> None:
 
 _configure_stream_utf8(sys.stdout)
 _configure_stream_utf8(sys.stderr)
+
+
+def _ascii_text(value: object) -> str:
+    return str(value).encode("ascii", "backslashreplace").decode("ascii")
+
+
+def _safe_print(*args: object, sep: str = " ", end: str = "\n", file=sys.stdout, flush: bool = False) -> None:
+    rendered = sep.join(_ascii_text(arg) for arg in args)
+    builtins.print(rendered, end=end, file=file, flush=flush)
+
+
+print = _safe_print
 
 
 # ── CSV 字段定义 ──
@@ -95,7 +107,7 @@ def resolve_root(args: list[str]) -> Path:
             root = Path(args[i + 1])
             break
     if not root.exists():
-        print(f"错误：项目根目录不存在 → {root}")
+        print(f"Error: project root does not exist -> {root}")
         sys.exit(1)
     return root
 
@@ -232,7 +244,7 @@ def match_platform(row: dict, platform: Optional[str], include_universal: bool =
 def read_evolve(path: Path) -> str:
     """读取 EVOLVE.md 内容"""
     if not path.exists():
-        print(f"警告：{path} 不存在，请先执行初始化")
+        print(f"Warning: {path} does not exist. Run init first.")
         return ""
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
@@ -353,7 +365,7 @@ def load_platform_target_map(root: Path) -> dict[str, str]:
         with open(config_path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"⚠️ 平台映射配置读取失败：{config_path} ({exc})")
+        print(f"Warning: failed to read platform target config: {config_path} ({exc})")
         return {}
 
     if not isinstance(data, dict):
@@ -660,22 +672,22 @@ def sync_platform_files(
 def print_platform_sync_summary(summary: dict[str, list[str]]) -> None:
     targets = summary.get("targets", [])
     if not targets:
-        print("平台文件同步：无目标（已跳过）")
+        print("Platform file sync: no targets (skipped)")
         return
 
     created = summary.get("created", [])
     updated = summary.get("updated", [])
     unchanged = summary.get("unchanged", [])
     print(
-        f"平台文件同步完成：{len(targets)} 个目标，"
+        f"Platform file sync complete: {len(targets)} targets, "
         f"created={len(created)} updated={len(updated)} unchanged={len(unchanged)}"
     )
     if created:
-        print("  新建：")
+        print("  Created:")
         for path in created:
             print(f"    - {path}")
     if updated:
-        print("  更新：")
+        print("  Updated:")
         for path in updated:
             print(f"    - {path}")
 
@@ -726,11 +738,11 @@ def cmd_init(root: Path) -> None:
     """初始化 audit.csv"""
     path = audit_csv_path(root)
     if path.exists():
-        print(f"audit.csv 已存在 → {path}")
+        print(f"audit.csv already exists -> {path}")
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     write_audit(path, [])
-    print(f"已创建 → {path}")
+    print(f"Created -> {path}")
 
 
 def cmd_scopes(root: Path, args: Optional[list[str]] = None) -> None:
@@ -740,7 +752,7 @@ def cmd_scopes(root: Path, args: Optional[list[str]] = None) -> None:
     csv_path = audit_csv_path(root)
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在")
+        print("audit.csv is empty or missing")
         return
 
     # 收集所有 scope 及其层级拆分
@@ -765,22 +777,22 @@ def cmd_scopes(root: Path, args: Optional[list[str]] = None) -> None:
                 all_keywords[part] = all_keywords.get(part, 0) + scope_map[scope]["count"]
 
     if not scope_map:
-        hint = f"（平台过滤：{platform}）" if platform else ""
-        print(f"未找到有效 scope {hint}")
+        hint = f" (platform filter: {platform})" if platform else ""
+        print(f"No valid scopes found{hint}")
         return
 
     platform_text = platform if platform else "all"
-    print(f"[共 {len(scope_map)} 个 scope，{sum(v['count'] for v in scope_map.values())} 条活跃规则 | platform: {platform_text}]\n")
+    print(f"[{len(scope_map)} scopes, {sum(v['count'] for v in scope_map.values())} active rules | platform: {platform_text}]\n")
 
-    print("可用关键词（按规则数排序）：")
+    print("Available keywords (sorted by rule count):")
     for kw, count in sorted(all_keywords.items(), key=lambda x: -x[1]):
-        print(f"  {kw:<20} ({count} 条)")
+        print(f"  {kw:<20} ({count} rules)")
 
-    print(f"\n完整 scope 列表：")
+    print("\nFull scope list:")
     for scope, info in sorted(scope_map.items()):
         ids = ", ".join(info["ids"][:5])
         suffix = "..." if len(info["ids"]) > 5 else ""
-        print(f"  {scope:<30} → {ids}{suffix}")
+        print(f"  {scope:<30} -> {ids}{suffix}")
 
 
 def cmd_filter(root: Path, args: list[str]) -> None:
@@ -788,15 +800,15 @@ def cmd_filter(root: Path, args: list[str]) -> None:
     platform = extract_platform_arg(args)
     keywords = extract_keywords(args)
     if not keywords and not platform:
-        print("用法：audit_sync.py filter <关键词1,关键词2,...> [--platform <name>]")
-        print("或：audit_sync.py filter --platform <name>")
-        print("提示：先运行 scopes 命令查看可用关键词")
+        print("Usage: audit_sync.py filter <keyword1,keyword2,...> [--platform <name>]")
+        print("   or: audit_sync.py filter --platform <name>")
+        print("Hint: run `scopes` to list available keywords")
         return
 
     csv_path = audit_csv_path(root)
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在")
+        print("audit.csv is empty or missing")
         return
 
     matched = [
@@ -808,10 +820,10 @@ def cmd_filter(root: Path, args: list[str]) -> None:
 
     if not matched:
         if keywords:
-            print(f"未匹配到任何条目（关键词：{', '.join(keywords)}，platform: {platform or 'all'}）")
+            print(f"No entries matched (keywords: {', '.join(keywords)}, platform: {platform or 'all'})")
         else:
-            print(f"未匹配到任何条目（platform: {platform}）")
-        print("提示：运行 scopes 命令查看可用关键词")
+            print(f"No entries matched (platform: {platform})")
+        print("Hint: run `scopes` to list available keywords")
         return
 
     # 按遵守率排序：低遵守率优先（需要重点关注的排前面）
@@ -822,7 +834,7 @@ def cmd_filter(root: Path, args: list[str]) -> None:
     matched.sort(key=sort_key)
 
     keyword_text = ", ".join(keywords) if keywords else "*"
-    print(f"[{len(matched)} 条匹配 scope: {keyword_text} | platform: {platform or 'all'}]")
+    print(f"[{len(matched)} matched rules | scope: {keyword_text} | platform: {platform or 'all'}]")
     # 精简表格输出
     id_w = max(len(r["rule_id"]) for r in matched)
     platform_w = max(len(row_platform(r)) for r in matched)
@@ -834,8 +846,8 @@ def cmd_filter(root: Path, args: list[str]) -> None:
         platform_tag = row_platform(r)
         print(f"  {r['rule_id']:<{id_w}} | {platform_tag:<{platform_w}} | {r['scope']:<{scope_w}} | {origin:<11} | {stats:<20} | {title}")
 
-    print(f"\n打分语法：score \"R-001:+hit R-002:+vio+err ...\" [--scope \"关键词\"] [--platform \"{platform or 'name'}\"]")
-    print(f"未打分的 {len(matched)} 条将自动 auto_skip+1")
+    print(f"\nScoring syntax: score \"R-001:+hit R-002:+vio+err ...\" [--scope \"keywords\"] [--platform \"{platform or 'name'}\"]")
+    print(f"{len(matched)} unmatched filtered rules will receive auto_skip+1")
 
 
 def cmd_score(root: Path, args: list[str]) -> None:
@@ -866,19 +878,19 @@ def cmd_score(root: Path, args: list[str]) -> None:
             i += 1
 
     if not score_str:
-        print("用法：audit_sync.py score \"R-001:+hit R-003:+vio+err\" [--scope \"前端,React\"] [--platform \"codex\"]")
+        print("Usage: audit_sync.py score \"R-001:+hit R-003:+vio+err\" [--scope \"frontend,react\"] [--platform \"codex\"]")
         return
 
     scores = parse_score_string(score_str)
     if not scores:
-        print(f"无法解析打分字符串：{score_str}")
-        print("格式：R-001:+hit R-003:+vio+err S-002:+hit")
+        print(f"Cannot parse score string: {score_str}")
+        print("Format: R-001:+hit R-003:+vio+err S-002:+hit")
         return
 
     csv_path = audit_csv_path(root)
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在")
+        print("audit.csv is empty or missing")
         return
 
     today = date.today().isoformat()
@@ -936,17 +948,17 @@ def cmd_score(root: Path, args: list[str]) -> None:
     write_audit(csv_path, updated_rows)
 
     # 输出结果
-    print(f"打分完成：{updated_count} 条已更新")
+    print(f"Scoring complete: {updated_count} rules updated")
     for rule_id, actions in scores.items():
         if rule_id not in not_found:
-            print(f"  {rule_id} → +{', +'.join(actions)}")
+            print(f"  {rule_id} -> +{', +'.join(actions)}")
     if auto_skipped:
-        print(f"\n自动 auto_skip+1：{len(auto_skipped)} 条")
+        print(f"\nAuto auto_skip+1: {len(auto_skipped)} rules")
         print(f"  {', '.join(auto_skipped)}")
         if platform:
-            print(f"  平台过滤：{platform}")
+            print(f"  Platform filter: {platform}")
     if not_found:
-        print(f"\n⚠️ 以下 rule_id 不存在：{', '.join(not_found)}")
+        print(f"\nWarning: unknown rule_id(s): {', '.join(not_found)}")
 
 
 def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
@@ -957,7 +969,7 @@ def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
 
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在，无需同步")
+        print("audit.csv is empty or missing; nothing to sync")
         return
 
     content = read_evolve(md_path)
@@ -996,13 +1008,13 @@ def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
     write_audit(csv_path, updated_rows)
     platform_summary = sync_platform_files(root, updated_rows, content, args)
 
-    print(f"同步完成 → {md_path}")
+    print(f"Sync complete -> {md_path}")
     print_platform_sync_summary(platform_summary)
     if review_items:
-        print(f"⚠️ 以下规则已标记为待审查：{', '.join(review_items)}")
+        print(f"Warning: marked for review: {', '.join(review_items)}")
     if low_value_items:
-        print(f"❔ 低价值嫌疑（hit≥8 且从未违反）：{', '.join(low_value_items)}")
-        print("  → 运行 report 查看详情，由用户确认是否 protected 或 archived")
+        print(f"Low-value candidates (hit>=8 with no violations): {', '.join(low_value_items)}")
+        print("  -> Run `report` and confirm whether to mark as protected or archived")
 
 
 def cmd_sync_platform(root: Path, args: Optional[list[str]] = None) -> None:
@@ -1013,7 +1025,7 @@ def cmd_sync_platform(root: Path, args: Optional[list[str]] = None) -> None:
 
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在，无法同步平台文件")
+        print("audit.csv is empty or missing; cannot sync platform files")
         return
 
     content = read_evolve(md_path)
@@ -1029,7 +1041,7 @@ def cmd_report(root: Path) -> None:
     csv_path = audit_csv_path(root)
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在")
+        print("audit.csv is empty or missing")
         return
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
@@ -1038,9 +1050,9 @@ def cmd_report(root: Path) -> None:
     protected_rows = [r for r in rows if r["status"] == "protected"]
 
     print("=" * 60)
-    print("  审计报告")
+    print("  Audit Report")
     print("=" * 60)
-    print(f"\n总计：{len(rows)} 条（active: {len(active_rows) - len(protected_rows)}, protected: {len(protected_rows)}, review: {len(review_rows)}, archived: {len(archived_rows)}）\n")
+    print(f"\nTotal: {len(rows)} (active: {len(active_rows) - len(protected_rows)}, protected: {len(protected_rows)}, review: {len(review_rows)}, archived: {len(archived_rows)})\n")
 
     # 高频违反
     high_vio = [
@@ -1049,9 +1061,9 @@ def cmd_report(root: Path) -> None:
         if r["vio"] >= 3 and (cr := compliance_rate(r)) is not None and cr < 0.5
     ]
     if high_vio:
-        print("⚠️ 高频违反（需重点强调）：")
+        print("[WARN] Frequent violations (needs emphasis):")
         for r in high_vio:
-            print(f"  [{r['rule_id']}] {r['scope']} — 遵守率: {compliance_rate(r):.0%}, vio: {r['vio']}")
+            print(f"  [{r['rule_id']}] {r['scope']} - compliance: {compliance_rate(r):.0%}, vio: {r['vio']}")
         print()
 
     # 高危规则
@@ -1061,52 +1073,52 @@ def cmd_report(root: Path) -> None:
         if r["err"] >= 2 and (dr := danger_rate(r)) is not None and dr >= 0.5
     ]
     if high_danger:
-        print("🚨 高危规则（违反极易导致错误）：")
+        print("[HIGH-RISK] Rules where violations often cause errors:")
         for r in high_danger:
-            print(f"  [{r['rule_id']}] {r['scope']} — 危险度: {danger_rate(r):.0%}, err: {r['err']}")
+            print(f"  [{r['rule_id']}] {r['scope']} - danger: {danger_rate(r):.0%}, err: {r['err']}")
         print()
 
     # 难执行规则（重要但经常违反）
     hard_to_follow = [r for r in active_rows if r["hit"] >= 3 and r["vio"] >= 3]
     if hard_to_follow:
-        print("🔧 难执行（规则重要但表述可能不清晰，建议重写）：")
+        print("[REWRITE] Important but hard-to-follow rules:")
         for r in hard_to_follow:
             cr = compliance_rate(r)
-            print(f"  [{r['rule_id']}] {r['scope']} — 遵守率: {cr:.0%}, hit:{r['hit']} vio:{r['vio']}")
+            print(f"  [{r['rule_id']}] {r['scope']} - compliance: {cr:.0%}, hit:{r['hit']} vio:{r['vio']}")
         print()
 
     # 低价值嫌疑（正确的废话）：hit >= 8 且历史 vio=0 err=0，排除 protected 和 origin=error
     low_value = [r for r in rows if r["status"] == "active" and r["hit"] >= 8 and r["vio"] == 0 and r["err"] == 0 and r.get("origin") != "error"]
     if low_value:
-        print("❔ 低价值嫌疑（从未被违反的高频命中规则，且非源于实际错误）：")
+        print("[REVIEW] Low-value candidates (high hit, never violated, origin!=error):")
         for r in low_value:
-            print(f"  [{r['rule_id']}] {r['scope']} (origin:{r.get('origin', '?')}) — hit:{r['hit']} vio:0 err:0 — {r.get('title', '')}")
-        print("  → 用户确认：'防患于未然' → protected；'正确的废话' → archived")
+            print(f"  [{r['rule_id']}] {r['scope']} (origin:{r.get('origin', '?')}) - hit:{r['hit']} vio:0 err:0 - {r.get('title', '')}")
+        print("  -> User decision: keep as protected, or archive as low-value")
         print()
 
     # 优质规则（表述清晰、执行良好）
     quality = [r for r in active_rows if r["hit"] >= 3 and r["vio"] == 0 and r["hit"] < 8]
     if quality:
-        print("✅ 优质规则（表述清晰，每次读到都能正确执行）：")
+        print("[GOOD] Clear and reliably followed rules:")
         for r in quality:
-            print(f"  [{r['rule_id']}] {r['scope']} — hit: {r['hit']}")
+            print(f"  [{r['rule_id']}] {r['scope']} - hit: {r['hit']}")
         print()
 
     # 待审查
     if review_rows:
-        print("❓ 待审查（可能已过时，需用户确认）：")
+        print("[PENDING REVIEW] Possibly outdated rules:")
         for r in review_rows:
-            print(f"  [{r['rule_id']}] {r['scope']} — skip: {r['skip']}, auto_skip: {r['auto_skip']}, last: {r['last_reviewed']}")
+            print(f"  [{r['rule_id']}] {r['scope']} - skip: {r['skip']}, auto_skip: {r['auto_skip']}, last: {r['last_reviewed']}")
         print()
 
     # 活跃度 Top 5
     sorted_by_activity = sorted(active_rows, key=lambda r: activity(r), reverse=True)[:5]
     if sorted_by_activity:
-        print("📊 活跃度 Top 5：")
+        print("[TOP 5] Highest activity rules:")
         for r in sorted_by_activity:
             act = activity(r)
             if act > 0:
-                print(f"  [{r['rule_id']}] {r['scope']} — 活跃度: {act} (hit:{r['hit']} vio:{r['vio']})")
+                print(f"  [{r['rule_id']}] {r['scope']} - activity: {act} (hit:{r['hit']} vio:{r['vio']})")
         print()
 
 
@@ -1117,7 +1129,7 @@ def cmd_promote(root: Path, args: Optional[list[str]] = None) -> None:
     csv_path = audit_csv_path(root)
     rows = read_audit(csv_path)
     if not rows:
-        print("audit.csv 为空或不存在")
+        print("audit.csv is empty or missing")
         return
 
     # 平台教训（S-xxx）中高频违反的
@@ -1132,31 +1144,31 @@ def cmd_promote(root: Path, args: Optional[list[str]] = None) -> None:
         cr = compliance_rate(r)
         # 条件1：vio >= 3 且遵守率 < 50%
         if r["vio"] >= 3 and cr is not None and cr < 0.5:
-            candidates.append({**r, "reason": f"高频违反（遵守率 {cr:.0%}）"})
+            candidates.append({**r, "reason": f"Frequent violations (compliance {cr:.0%})"})
             continue
         # 条件2：err >= 2 且危险度 >= 0.5
         dr = danger_rate(r)
         if r["err"] >= 2 and dr is not None and dr >= 0.5:
-            candidates.append({**r, "reason": f"高危（危险度 {dr:.0%}）"})
+            candidates.append({**r, "reason": f"High risk (danger {dr:.0%})"})
 
     if not candidates:
         if platform:
-            print(f"当前无晋升建议（platform: {platform}）")
+            print(f"No promotion suggestions (platform: {platform})")
         else:
-            print("当前无晋升建议")
+            print("No promotion suggestions")
         return
 
     print("=" * 60)
-    print("  用户级晋升建议")
+    print("  User-Level Promotion Suggestions")
     print("=" * 60)
-    title_suffix = f"（platform: {platform}）" if platform else ""
-    print(f"\n以下平台教训建议晋升至用户级配置文件{title_suffix}：\n")
+    title_suffix = f" (platform: {platform})" if platform else ""
+    print(f"\nSuggested platform lessons to promote to user-level config{title_suffix}:\n")
     for c in candidates:
         print(f"  [{c['rule_id']}] [{row_platform(c)}] {c['scope']}")
-        print(f"    原因：{c['reason']}")
-        print(f"    数据：hit={c['hit']} vio={c['vio']} err={c['err']}")
+        print(f"    Reason: {c['reason']}")
+        print(f"    Stats: hit={c['hit']} vio={c['vio']} err={c['err']}")
         print()
-    print("请在复盘时由用户确认是否执行晋升。")
+    print("Please confirm promotion with the user during retrospective.")
 
 
 # ── 入口 ──
@@ -1187,11 +1199,10 @@ def main():
     elif command == "report":
         cmd_report(root)
     else:
-        print(f"未知命令：{command}")
-        print(f"可用命令：init, scopes, filter, score, sync, sync_platform, report, promote")
+        print(f"Unknown command: {command}")
+        print("Available commands: init, scopes, filter, score, sync, sync_platform, report, promote")
         sys.exit(1)
 
 
 if __name__ == "__main__":
     main()
-
