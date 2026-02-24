@@ -1,3 +1,5 @@
 AGENTS.md
 __pycache__/
 *.py[cod]
+_tmp_sync_demo_keep/
+_tmp_sync_demo_keep2/
