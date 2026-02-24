@@ -1,6 +1,6 @@
 ---
 name: Evolve-Skill
-description: 核心进化技能。在开发结束时调用，自动分析对话历史，将“项目进化资产”沉淀到 EVOLVE.md，并将平台特有的 AI 行为教训写入 CLAUDE.md / GEMINI.md / AGENTS.md，实现可审计、可复用的持续进化。触发词："总结经验"、"进化"、"evolve"、"复盘"、"summarize lessons"、"retrospective"、"postmortem"。不适用于仅完成简单查询、单文件小改动或未产生可沉淀资产的场景。
+description: 核心进化技能。在开发结束时调用，自动分析对话历史，将“项目进化资产”沉淀到 EVOLVE.md，并将平台特有的 AI 行为教训写入 CLAUDE.md / GEMINI.md / AGENTS.md / CURSOR.md，实现可审计、可复用的持续进化。触发词："总结经验"、"进化"、"evolve"、"复盘"、"summarize lessons"、"retrospective"、"postmortem"。不适用于仅完成简单查询、单文件小改动或未产生可沉淀资产的场景。
 ---
 
 # Evolve-Skill

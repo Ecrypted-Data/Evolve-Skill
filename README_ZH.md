@@ -68,12 +68,14 @@ skill触发后，AI 将按“概览 + 执行版”两层流程运行。
 
 ![闭环工作流](asset/images/readme/The%20Closed-Loop%20Workflow.png)
 
-### 概览流程（4 步）
+### 概览流程（6 步）
 
 1. **读取上下文**：扫描 `EVOLVE.md` 与平台配置文件。
 2. **提取与分类**：从对话中提取“项目通用资产”和“平台特有教训”。
 3. **审计与打分**：通过 `scopes / filter / score` 复用已有规则并更新指标。
-4. **同步与校验**：执行 `sync` 写回文档与自动区块，并做健康检查。
+4. **生成写入建议**：执行 `report` 输出编号的待写入候选条目。
+5. **最终选择**：执行 `select "<numbers>"` 标记最终写入的条目（设置 `evolve_slot`）。
+6. **同步与校验**：执行 `sync` 写回文档与自动区块，并做健康检查。
 
 ### 执行版流程（标准顺序）
 
@@ -85,6 +87,9 @@ skill触发后，AI 将按“概览 + 执行版”两层流程运行。
 2. **先审计再提炼（强制）**
    - 先运行 `scopes` 查看领域，再运行 `filter` 缩小范围，最后运行 `score` 打分。
    - 若复盘的是平台教训（`S-xxx`），`filter` 和 `score` 必须使用同一个 `--platform <name>`，避免跨平台污染。
+   - 推荐阶段（生成写入建议 + 选择）：
+     - `python scripts/audit_sync.py report --project-root <project-root>`
+     - `python scripts/audit_sync.py select "1,3" --project-root <project-root>`
 
 3. **双通道提炼**
    - 通用资产写入 `EVOLVE.md`：TL;DR、Runbooks、Rules、History 索引、Changelog。
@@ -98,6 +103,7 @@ skill触发后，AI 将按“概览 + 执行版”两层流程运行。
    - 核心同步：`python scripts/audit_sync.py sync --project-root <project-root>`
    - 可选：
      - 仅同步单个平台：`--platform <name>`
+     - 限制 EVOLVE 同步目标（仅通用规则 + 指定平台）：`--evolve-platform <name>`
      - 仅同步平台文件：`sync_platform`
      - 跳过平台自动区块：`--no-platform-sync`
    - 建议执行健康检查：
@@ -198,6 +204,7 @@ python scripts/health_check.py --project-root /path/to/your/project --json
 | `auto_skip` | **自动跳过次数**：在筛选范围内但本轮未打分时自动累计的次数 | `2` |
 | `last_reviewed` | 最近一次审计日期（ISO 格式） | `2026-02-23` |
 | `status` | 规则当前生命周期 (`active` / `protected` / `review` / `archived`) | `active` |
+| `evolve_slot` | Agent 选择的写入 EVOLVE 的顺序槽位，`0` 表示不写入 | `2` |
 
 ### 自动区块约定
 
