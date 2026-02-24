@@ -125,7 +125,8 @@ skill触发后，AI 将按“概览 + 执行版”两层流程运行。
 └── evolve/
     ├── audit.csv                      # 核心：经验追踪与生命周期审计数据
     ├── history/                       # 分文件存储的重大事件复盘记录
-    └── runbooks/                      # 分文件存储的标准操作手册（如部署、发版步骤）
+    ├── runbooks/                      # 分文件存储的标准操作手册（如部署、发版步骤）
+    └── rules/                         # 每条规则的详细内容与追溯链接（history/runbooks）
 
 ```
 
@@ -147,8 +148,15 @@ python scripts/audit_sync.py scopes --project-root /path/to/your/project
 # 筛选特定平台或领域的规则
 python scripts/audit_sync.py filter --project-root /path/to/your/project --platform claude
 
+# 生成可写入 EVOLVE 的编号建议，并由 Agent 选择最终条目
+python scripts/audit_sync.py report --project-root /path/to/your/project
+python scripts/audit_sync.py select "1,3" --project-root /path/to/your/project
+
 # 同步数据到 EVOLVE.md 与平台自动区块
 python scripts/audit_sync.py sync --project-root /path/to/your/project
+
+# 限制 EVOLVE 同步目标（仅通用规则 + 指定平台）
+python scripts/audit_sync.py sync --project-root /path/to/your/project --evolve-platform codex
 
 # 输出晋升建议（仅输出候选项，不会自动改写规则）
 python scripts/audit_sync.py promote --project-root /path/to/your/project

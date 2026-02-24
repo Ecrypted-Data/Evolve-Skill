@@ -34,6 +34,9 @@
 * **短而硬**：宁少勿滥；不产生复利的“建议”不要进入 Rules
 * **去重合并**：新增内容与旧规则同主题时，应合并为一条更强的协议化规则
 * **索引优先**：高频规则要在 TL;DR 或 Rules 顶部可见
+* **标题与正文分离**：`audit.csv` 的 `title` 只保留短描述，详细规则正文写入 `evolve/rules/<RULE_ID>.md`
+* **可追溯**：每条规则正文必须链接相关 `history` 与 `runbook`（通过 `EVOLVE_SKILL:TRACE_LINKS` 自动块维护）
+* **选择后写入**：EVOLVE.md 的 Rules 条目应基于审计建议与 `evolve_slot` 选择结果生成，而非无差别自动灌入
 
 **新增经验的 origin 与初始值**：
 

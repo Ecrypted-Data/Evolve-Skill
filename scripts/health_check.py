@@ -56,7 +56,7 @@ print = _safe_print
 
 VALID_ORIGINS = {"error", "preventive", "imported"}
 VALID_STATUSES = {"active", "protected", "review", "archived"}
-COUNTER_FIELDS = ("hit", "vio", "err", "skip", "auto_skip")
+COUNTER_FIELDS = ("hit", "vio", "err", "skip", "auto_skip", "evolve_slot")
 PLATFORM_ALL = "all"
 PLATFORM_ALIASES = {
     "all": "all",
@@ -75,7 +75,7 @@ PLATFORM_ALIASES = {
 }
 KNOWN_PLATFORM_VALUES = {"all", "claude", "gemini", "codex", "cursor"}
 REQUIRED_FIELDS = {"rule_id", "platform", "scope", "title", "origin", "hit", "vio", "err",
-                   "skip", "auto_skip", "last_reviewed", "status"}
+                   "skip", "auto_skip", "last_reviewed", "status", "evolve_slot"}
 
 # 阈值配置
 ZOMBIE_DAYS = 30           # 超过此天数未审计 → 僵尸规则
@@ -173,6 +173,18 @@ def platform_targets_path(root: Path) -> Path:
     return root / "evolve" / PLATFORM_TARGETS_CONFIG
 
 
+def rules_dir_path(root: Path) -> Path:
+    return root / "evolve" / "rules"
+
+
+def history_dir_path(root: Path) -> Path:
+    return root / "evolve" / "history"
+
+
+def runbooks_dir_path(root: Path) -> Path:
+    return root / "evolve" / "runbooks"
+
+
 # ── CSV 读取 ──
 
 def is_platform_rule(row: dict) -> bool:
@@ -211,9 +223,14 @@ def read_audit(path: Path) -> list[dict]:
         rows = []
         for row in reader:
             for field in COUNTER_FIELDS:
-                row[field] = int(row.get(field, 0))
+                raw_value = row.get(field, 0)
+                try:
+                    row[field] = int(raw_value)
+                except (TypeError, ValueError):
+                    row[field] = 0
             row.setdefault("title", "")
             row.setdefault("auto_skip", 0)
+            row.setdefault("evolve_slot", 0)
             row.setdefault("origin", "error")
             row["platform"] = canonical_platform(row.get("platform", ""))
             if row["platform"] == PLATFORM_ALL and is_platform_rule(row):
@@ -333,7 +350,171 @@ def discover_sync_platforms(
     return sorted(platforms)
 
 
-def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) -> str:
+def extract_markdown_section(content: str, heading: str) -> str:
+    match = re.search(rf"^##\s+{re.escape(heading)}\s*$", content, re.MULTILINE)
+    if not match:
+        return ""
+    next_section = re.search(r"^##\s+", content[match.end():], re.MULTILINE)
+    end = match.end() + next_section.start() if next_section else len(content)
+    return content[match.end():end].strip()
+
+
+def clean_rule_content_line(line: str, rule_id: str) -> str:
+    text = line.strip()
+    text = re.sub(r"^[>\-*+\d.\s]+", "", text)
+    text = re.sub(r"\s*`\{hit:\d+\s+vio:\d+\s+err:\d+\}`", "", text)
+    text = re.sub(rf"^\[{re.escape(rule_id)}\]\s*", "", text)
+    text = text.replace("**", "")
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def extract_rule_content_map_from_evolve(evolve_content: str) -> dict[str, str]:
+    rules_text = extract_markdown_section(evolve_content, "Rules")
+    if not rules_text.strip():
+        return {}
+    content_map: dict[str, str] = {}
+    for raw_line in rules_text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("<!--"):
+            continue
+        match = re.search(r"\[((?:R|S)-\d+)\]", line)
+        if not match:
+            continue
+        rule_id = match.group(1)
+        content = clean_rule_content_line(line, rule_id)
+        if content:
+            content_map[rule_id] = content
+    return content_map
+
+
+def rule_detail_path(root: Path, rule_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9._-]+", "_", rule_id.strip()) or "rule"
+    return rules_dir_path(root) / f"{safe_id}.md"
+
+
+def extract_rule_content_from_detail(detail_text: str) -> str:
+    section = re.search(
+        r"^##\s+Rule\s*$\n(.*?)(?=^##\s+|\Z)",
+        detail_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    source = section.group(1) if section else detail_text
+    lines = []
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("<!--"):
+            continue
+        if line.startswith("#"):
+            continue
+        if line.startswith("- ") and ":" in line:
+            continue
+        line = re.sub(r"^[>\-*+\d.\s]+", "", line).strip()
+        if line:
+            lines.append(line)
+    text = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    if len(text) > 220:
+        return text[:217].rstrip() + "..."
+    return text
+
+
+def load_rule_content_map_from_files(root: Path, rows: list[dict]) -> dict[str, str]:
+    content_map: dict[str, str] = {}
+    if not rules_dir_path(root).exists():
+        return content_map
+    for row in rows:
+        if row.get("status") == "archived":
+            continue
+        rule_id = row.get("rule_id", "").strip()
+        if not rule_id or rule_id in content_map:
+            continue
+        path = rule_detail_path(root, rule_id)
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        content = extract_rule_content_from_detail(text)
+        if content:
+            content_map[rule_id] = content
+    return content_map
+
+
+def resolve_rule_content_map(root: Path, evolve_content: str, rows: list[dict]) -> dict[str, str]:
+    from_evolve = extract_rule_content_map_from_evolve(evolve_content)
+    from_files = load_rule_content_map_from_files(root, rows)
+    merged = dict(from_evolve)
+    merged.update(from_files)
+    return merged
+
+
+def root_relative_posix(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def rule_reference_pattern(rule_id: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(rule_id)}(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+def find_related_markdown_paths(rule_id: str, candidates: list[Path]) -> list[Path]:
+    pattern = rule_reference_pattern(rule_id)
+    related: list[Path] = []
+    for path in candidates:
+        if path.stem.lower() == rule_id.lower():
+            related.append(path)
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if pattern.search(text):
+            related.append(path)
+    return related
+
+
+def resolve_rule_trace_map(root: Path, rows: list[dict]) -> dict[str, dict[str, list[str]]]:
+    history_dir = history_dir_path(root)
+    runbook_dir = runbooks_dir_path(root)
+    history_candidates = sorted(history_dir.rglob("*.md")) if history_dir.exists() else []
+    runbook_candidates = sorted(runbook_dir.rglob("*.md")) if runbook_dir.exists() else []
+
+    trace_map: dict[str, dict[str, list[str]]] = {}
+    for row in rows:
+        if row.get("status") == "archived":
+            continue
+        rule_id = row.get("rule_id", "").strip()
+        if not rule_id:
+            continue
+        history_paths = find_related_markdown_paths(rule_id, history_candidates)
+        runbook_paths = find_related_markdown_paths(rule_id, runbook_candidates)
+        trace_map[rule_id] = {
+            "history": [
+                root_relative_posix(root, p)
+                for p in sorted({*history_paths}, key=lambda x: x.as_posix())
+            ],
+            "runbooks": [
+                root_relative_posix(root, p)
+                for p in sorted({*runbook_paths}, key=lambda x: x.as_posix())
+            ],
+        }
+    return trace_map
+
+
+def build_platform_digest(
+    platform: str,
+    evolve_content: str,
+    rows: list[dict],
+    rule_content_map: Optional[dict[str, str]] = None,
+    rule_trace_map: Optional[dict[str, dict[str, list[str]]]] = None,
+) -> str:
     relevant = []
     for row in rows:
         if row["status"] not in ("active", "protected"):
@@ -341,18 +522,23 @@ def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) 
         if is_platform_rule(row):
             if row_platform(row) != platform:
                 continue
-        relevant.append(
-            {
-                "rule_id": row["rule_id"],
-                "platform": row_platform(row),
-                "scope": row.get("scope", ""),
-                "title": row.get("title", ""),
-                "hit": row["hit"],
-                "vio": row["vio"],
-                "err": row["err"],
-                "status": row.get("status", ""),
-            }
-        )
+        item = {
+            "rule_id": row["rule_id"],
+            "platform": row_platform(row),
+            "scope": row.get("scope", ""),
+            "title": row.get("title", ""),
+            "hit": row["hit"],
+            "vio": row["vio"],
+            "err": row["err"],
+            "status": row.get("status", ""),
+        }
+        if rule_content_map:
+            item["content"] = rule_content_map.get(row["rule_id"], "")
+        if rule_trace_map:
+            trace = rule_trace_map.get(row["rule_id"], {})
+            item["history"] = trace.get("history", [])
+            item["runbooks"] = trace.get("runbooks", [])
+        relevant.append(item)
     relevant.sort(key=lambda r: r["rule_id"])
 
     payload = {
@@ -592,6 +778,8 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
     missing_blocks = []
     missing_digest = []
     stale_digest = []
+    rule_content_map = resolve_rule_content_map(root, evolve_content, rows)
+    rule_trace_map = resolve_rule_trace_map(root, rows)
     for platform in platforms:
         target_path = resolve_platform_file_path(root, platform, config_map, marker_map)
         if not target_path.exists():
@@ -606,7 +794,13 @@ def check_consistency(rows: list[dict], evolve_content: str, evolve_path: Path, 
             missing_digest.append(f"{platform} -> {target_path}")
             continue
 
-        expected_digest = build_platform_digest(platform, evolve_content, rows)
+        expected_digest = build_platform_digest(
+            platform,
+            evolve_content,
+            rows,
+            rule_content_map,
+            rule_trace_map,
+        )
         if current_digest != expected_digest:
             stale_digest.append(
                 f"{platform} -> {target_path} (current:{current_digest} expected:{expected_digest})"

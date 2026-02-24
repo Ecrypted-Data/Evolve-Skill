@@ -7,7 +7,8 @@ Commands:
   scopes        List available scope keywords
   filter        Filter rules by scope/platform
   score         One-line scoring, unmatched filtered rules get auto_skip+1
-  sync          Sync metrics to EVOLVE.md and platform files
+  select        Select numbered audit suggestions for EVOLVE.md generation
+  sync          Sync metrics to EVOLVE.md, rule detail files, and platform files
   sync_platform Sync platform files only (does not modify EVOLVE.md)
   report        Print audit report with derived metrics and anomalies
   promote       Print promotion suggestions (platform lessons -> user config)
@@ -24,13 +25,16 @@ Suggested workflow:
   1. scopes
   2. filter "frontend,react" --platform codex
   3. score "R-001:+hit R-003:+vio+err" --scope "frontend,react" --platform codex
-  4. sync
+  4. report
+  5. select "1,3"
+  6. sync
 """
 
 import csv
 import builtins
 import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -61,7 +65,21 @@ print = _safe_print
 
 # ── CSV 字段定义 ──
 
-CSV_HEADER = ["rule_id", "platform", "scope", "title", "origin", "hit", "vio", "err", "skip", "auto_skip", "last_reviewed", "status"]
+CSV_HEADER = [
+    "rule_id",
+    "platform",
+    "scope",
+    "title",
+    "origin",
+    "hit",
+    "vio",
+    "err",
+    "skip",
+    "auto_skip",
+    "last_reviewed",
+    "status",
+    "evolve_slot",
+]
 VALID_STATUSES = {"active", "protected", "review", "archived"}
 VALID_ORIGINS = {"error", "preventive", "imported"}
 PLATFORM_ALL = "all"
@@ -96,6 +114,10 @@ PLATFORM_TARGETS_CONFIG = "platform_targets.json"
 AUTO_SYNC_BEGIN_PREFIX = "<!-- EVOLVE_SKILL:AUTO_SYNC:BEGIN"
 AUTO_SYNC_END = "<!-- EVOLVE_SKILL:AUTO_SYNC:END -->"
 AUTO_SYNC_HEADER = "## Evolve-Skill Auto Sync"
+TRACE_LINKS_BEGIN_PREFIX = "<!-- EVOLVE_SKILL:TRACE_LINKS:BEGIN"
+TRACE_LINKS_END = "<!-- EVOLVE_SKILL:TRACE_LINKS:END -->"
+RULE_SELECTION_BEGIN = "<!-- EVOLVE_SKILL:RULE_SELECTION:BEGIN -->"
+RULE_SELECTION_END = "<!-- EVOLVE_SKILL:RULE_SELECTION:END -->"
 
 
 # ── 路径工具 ──
@@ -125,6 +147,18 @@ def archived_rules_path(root: Path) -> Path:
     return root / "evolve" / "archived-rules.md"
 
 
+def rules_dir_path(root: Path) -> Path:
+    return root / "evolve" / "rules"
+
+
+def history_dir_path(root: Path) -> Path:
+    return root / "evolve" / "history"
+
+
+def runbooks_dir_path(root: Path) -> Path:
+    return root / "evolve" / "runbooks"
+
+
 def platform_targets_path(root: Path) -> Path:
     return root / "evolve" / PLATFORM_TARGETS_CONFIG
 
@@ -140,11 +174,16 @@ def read_audit(path: Path) -> list[dict]:
         rows = []
         for row in reader:
             # 数值字段转 int
-            for field in ("hit", "vio", "err", "skip", "auto_skip"):
-                row[field] = int(row.get(field, 0))
+            for field in ("hit", "vio", "err", "skip", "auto_skip", "evolve_slot"):
+                raw_value = row.get(field, 0)
+                try:
+                    row[field] = int(raw_value)
+                except (TypeError, ValueError):
+                    row[field] = 0
             # 兼容旧格式：缺少 title/auto_skip/origin/platform 字段
             row.setdefault("title", "")
             row.setdefault("auto_skip", 0)
+            row.setdefault("evolve_slot", 0)
             row.setdefault("origin", "error")  # 旧数据默认视为源于实际错误
             raw_platform = row.get("platform", "")
             row["platform"] = canonical_platform(raw_platform)
@@ -288,24 +327,32 @@ def write_evolve(path: Path, content: str) -> None:
 
 def update_rules_inline_tags(content: str, rows: list[dict]) -> str:
     """在 Rules 章节中更新内联审计标签 {hit:N vio:N err:N}"""
+    rules_match = re.search(r"^## Rules\s*\n", content, re.MULTILINE)
+    if not rules_match:
+        return content
+
+    next_section = re.search(r"^## (?!Rules)", content[rules_match.end():], re.MULTILINE)
+    rules_end = rules_match.end() + next_section.start() if next_section else len(content)
+    rules_content = content[rules_match.end():rules_end]
+
     for row in rows:
         if row["status"] == "archived":
             continue
         rule_id = re.escape(row["rule_id"])
         tag = f"`{{hit:{row['hit']} vio:{row['vio']} err:{row['err']}}}`"
-        # 先尝试替换已有标签
-        pattern = rf"(\[{rule_id}\][^\n]*?)\s*`\{{hit:\d+ vio:\d+ err:\d+\}}`"
-        new_content = re.sub(pattern, rf"\1  {tag}", content)
-        if new_content != content:
-            content = new_content
-        else:
-            # 没有已有标签，尝试在规则行末追加
-            pattern = rf"(\[{rule_id}\][^\n]+)"
-            match = re.search(pattern, content)
-            if match:
-                original_line = match.group(1)
-                content = content.replace(original_line, f"{original_line}  {tag}", 1)
-    return content
+        line_match = re.search(rf"^([^\n]*\[{rule_id}\][^\n]*)$", rules_content, re.MULTILINE)
+        if not line_match:
+            continue
+        original_line = line_match.group(1)
+        cleaned_line = re.sub(
+            r"\s*`\{hit:\d+\s+vio:\d+\s+err:\d+\}`",
+            "",
+            original_line,
+        ).rstrip()
+        new_line = f"{cleaned_line}  {tag}"
+        rules_content = rules_content.replace(original_line, new_line, 1)
+
+    return content[:rules_match.end()] + rules_content + content[rules_end:]
 
 
 def update_tldr_section(content: str, rows: list[dict]) -> str:
@@ -379,6 +426,70 @@ def update_tldr_section(content: str, rows: list[dict]) -> str:
         content = content[:tldr_match.end()] + tldr_content + content[tldr_end:]
 
     return content
+
+
+def format_selected_rule_for_evolve(
+    index: int,
+    row: dict,
+    rule_content_map: dict[str, str],
+    rule_trace_map: dict[str, dict[str, list[str]]],
+) -> str:
+    rid = row.get("rule_id", "")
+    scope = row.get("scope", "")
+    content = rule_content_map.get(rid, "").strip() or row.get("title", "").strip() or "(no content)"
+    if scope and content.startswith(f"[{scope}]"):
+        content = content[len(scope) + 2:].strip()
+    stats_tag = f"`{{hit:{row.get('hit', 0)} vio:{row.get('vio', 0)} err:{row.get('err', 0)}}}`"
+    line = f"{index}. [{rid}] [{scope}] {content}  {stats_tag}"
+    trace = rule_trace_map.get(rid, {"history": [], "runbooks": []})
+    history = format_trace_links_inline(trace.get("history", []))
+    runbooks = format_trace_links_inline(trace.get("runbooks", []))
+    return f"{line}\n   Trace: History {history}; Runbook {runbooks}"
+
+
+def render_selected_rules_block(root: Path, rows: list[dict]) -> str:
+    selected = [
+        r for r in rows
+        if r.get("status") != "archived" and int(r.get("evolve_slot", 0)) > 0
+    ]
+    selected.sort(key=lambda r: (int(r.get("evolve_slot", 0)), r.get("rule_id", "")))
+    rule_content_map = resolve_rule_content_map(root, "", rows)
+    rule_trace_map = resolve_rule_trace_map(root, rows, ensure_defaults=False)
+    lines = [
+        RULE_SELECTION_BEGIN,
+        "### Audit-Selected Rules",
+        "_Auto-generated from `evolve/audit.csv` `evolve_slot` ordering._",
+    ]
+    if not selected:
+        lines.append("- (no selected rules; run `audit_sync.py report` then `audit_sync.py select \"1,2\"`)")
+    else:
+        for idx, row in enumerate(selected, 1):
+            lines.append(format_selected_rule_for_evolve(idx, row, rule_content_map, rule_trace_map))
+    lines.append(RULE_SELECTION_END)
+    return "\n".join(lines)
+
+
+def upsert_selected_rules_block(content: str, block: str) -> str:
+    rules_match = re.search(r"^## Rules\s*\n", content, re.MULTILINE)
+    if not rules_match:
+        return content
+    next_section = re.search(r"^## (?!Rules)", content[rules_match.end():], re.MULTILINE)
+    rules_end = rules_match.end() + next_section.start() if next_section else len(content)
+    rules_content = content[rules_match.end():rules_end]
+
+    pattern = re.compile(
+        rf"{re.escape(RULE_SELECTION_BEGIN)}\n.*?{re.escape(RULE_SELECTION_END)}",
+        re.DOTALL,
+    )
+    if pattern.search(rules_content):
+        rules_content = pattern.sub(lambda _m: block, rules_content, count=1)
+    else:
+        base = rules_content.rstrip()
+        if base:
+            rules_content = base + "\n\n" + block + "\n"
+        else:
+            rules_content = block + "\n"
+    return content[:rules_match.end()] + rules_content + content[rules_end:]
 
 
 def has_flag(args: list[str], flag: str) -> bool:
@@ -538,7 +649,13 @@ def select_high_signal_rules(rows: list[dict], limit: int) -> list[dict]:
     return ranked[:limit]
 
 
-def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) -> str:
+def build_platform_digest(
+    platform: str,
+    evolve_content: str,
+    rows: list[dict],
+    rule_content_map: Optional[dict[str, str]] = None,
+    rule_trace_map: Optional[dict[str, dict[str, list[str]]]] = None,
+) -> str:
     relevant = []
     for row in rows:
         if row["status"] not in ("active", "protected"):
@@ -546,18 +663,23 @@ def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) 
         if is_platform_rule(row):
             if row_platform(row) != platform:
                 continue
-        relevant.append(
-            {
-                "rule_id": row["rule_id"],
-                "platform": row_platform(row),
-                "scope": row.get("scope", ""),
-                "title": row.get("title", ""),
-                "hit": row["hit"],
-                "vio": row["vio"],
-                "err": row["err"],
-                "status": row.get("status", ""),
-            }
-        )
+        item = {
+            "rule_id": row["rule_id"],
+            "platform": row_platform(row),
+            "scope": row.get("scope", ""),
+            "title": row.get("title", ""),
+            "hit": row["hit"],
+            "vio": row["vio"],
+            "err": row["err"],
+            "status": row.get("status", ""),
+        }
+        if rule_content_map:
+            item["content"] = rule_content_map.get(row["rule_id"], "")
+        if rule_trace_map:
+            trace = rule_trace_map.get(row["rule_id"], {})
+            item["history"] = trace.get("history", [])
+            item["runbooks"] = trace.get("runbooks", [])
+        relevant.append(item)
     relevant.sort(key=lambda r: r["rule_id"])
 
     payload = {
@@ -572,7 +694,7 @@ def build_platform_digest(platform: str, evolve_content: str, rows: list[dict]) 
 def clean_rule_content_line(line: str, rule_id: str) -> str:
     text = line.strip()
     text = re.sub(r"^[>\-*+\d.\s]+", "", text)
-    text = re.sub(r"\s*`\{hit:\d+\s+vio:\d+\s+err:\d+\}`\s*$", "", text)
+    text = re.sub(r"\s*`\{hit:\d+\s+vio:\d+\s+err:\d+\}`", "", text)
     text = re.sub(rf"^\[{re.escape(rule_id)}\]\s*", "", text)
     text = text.replace("**", "")
     return re.sub(r"\s{2,}", " ", text).strip()
@@ -599,7 +721,380 @@ def extract_rule_content_map(evolve_content: str) -> dict[str, str]:
     return content_map
 
 
-def format_rule_line(row: dict, rule_content_map: Optional[dict[str, str]] = None) -> str:
+def rule_detail_path(root: Path, rule_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9._-]+", "_", rule_id.strip()) or "rule"
+    return rules_dir_path(root) / f"{safe_id}.md"
+
+
+def root_relative_posix(root: Path, path: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def rule_reference_pattern(rule_id: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(rule_id)}(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+
+def find_related_markdown_paths(rule_id: str, candidates: list[Path]) -> list[Path]:
+    pattern = rule_reference_pattern(rule_id)
+    related: list[Path] = []
+    for path in candidates:
+        if path.stem.lower() == rule_id.lower():
+            related.append(path)
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if pattern.search(text):
+            related.append(path)
+    return related
+
+
+def ensure_trace_stub(root: Path, row: dict, kind: str) -> Path:
+    rule_id = row.get("rule_id", "").strip()
+    scope = row.get("scope", "").strip()
+    title = row.get("title", "").strip() or "TODO"
+    if kind == "history":
+        target = history_dir_path(root) / f"{rule_id}.md"
+        heading = f"# [{rule_id}] History"
+        todo = "- TODO: add event background, failure symptoms, and lessons learned."
+    else:
+        target = runbooks_dir_path(root) / f"{rule_id}.md"
+        heading = f"# [{rule_id}] Runbook"
+        todo = "- TODO: add executable checklist and verification steps."
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        return target
+
+    lines = [
+        heading,
+        "",
+        f"- Related Rule: `[{rule_id}]`",
+        f"- Scope: `{scope}`",
+        f"- Title: {title}",
+        f"- Created: `{date.today().isoformat()}`",
+        "",
+        todo,
+        "",
+    ]
+    target.write_text("\n".join(lines), encoding="utf-8")
+    return target
+
+
+def resolve_rule_trace_map(
+    root: Path,
+    rows: list[dict],
+    ensure_defaults: bool = False,
+) -> dict[str, dict[str, list[str]]]:
+    history_dir = history_dir_path(root)
+    runbook_dir = runbooks_dir_path(root)
+    if ensure_defaults:
+        history_dir.mkdir(parents=True, exist_ok=True)
+        runbook_dir.mkdir(parents=True, exist_ok=True)
+
+    history_candidates = sorted(history_dir.rglob("*.md")) if history_dir.exists() else []
+    runbook_candidates = sorted(runbook_dir.rglob("*.md")) if runbook_dir.exists() else []
+
+    trace_map: dict[str, dict[str, list[str]]] = {}
+    for row in rows:
+        if row.get("status") == "archived":
+            continue
+        rule_id = row.get("rule_id", "").strip()
+        if not rule_id:
+            continue
+
+        history_paths = find_related_markdown_paths(rule_id, history_candidates)
+        runbook_paths = find_related_markdown_paths(rule_id, runbook_candidates)
+
+        if ensure_defaults and not history_paths:
+            stub = ensure_trace_stub(root, row, "history")
+            history_paths = [stub]
+            history_candidates.append(stub)
+        if ensure_defaults and not runbook_paths:
+            stub = ensure_trace_stub(root, row, "runbook")
+            runbook_paths = [stub]
+            runbook_candidates.append(stub)
+
+        trace_map[rule_id] = {
+            "history": [
+                root_relative_posix(root, p)
+                for p in sorted({*history_paths}, key=lambda x: x.as_posix())
+            ],
+            "runbooks": [
+                root_relative_posix(root, p)
+                for p in sorted({*runbook_paths}, key=lambda x: x.as_posix())
+            ],
+        }
+    return trace_map
+
+
+def extract_rule_content_from_detail(detail_text: str) -> str:
+    section = re.search(
+        r"^##\s+Rule\s*$\n(.*?)(?=^##\s+|\Z)",
+        detail_text,
+        re.MULTILINE | re.DOTALL,
+    )
+    source = section.group(1) if section else detail_text
+    lines = []
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("<!--"):
+            continue
+        if line.startswith("#"):
+            continue
+        if line.startswith("- ") and ":" in line:
+            continue
+        line = re.sub(r"^[>\-*+\d.\s]+", "", line).strip()
+        if line:
+            lines.append(line)
+    text = re.sub(r"\s+", " ", " ".join(lines)).strip()
+    if len(text) > 220:
+        return text[:217].rstrip() + "..."
+    return text
+
+
+def load_rule_content_map_from_files(root: Path, rows: list[dict]) -> dict[str, str]:
+    content_map: dict[str, str] = {}
+    if not rules_dir_path(root).exists():
+        return content_map
+    for row in rows:
+        if row.get("status") == "archived":
+            continue
+        rule_id = row.get("rule_id", "").strip()
+        if not rule_id or rule_id in content_map:
+            continue
+        path = rule_detail_path(root, rule_id)
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        content = extract_rule_content_from_detail(text)
+        if content:
+            content_map[rule_id] = content
+    return content_map
+
+
+def resolve_rule_content_map(root: Path, evolve_content: str, rows: list[dict]) -> dict[str, str]:
+    """规则内容来源：优先 evolve/rules/*.md，缺失时回退到 EVOLVE.md Rules。"""
+    from_evolve = extract_rule_content_map(evolve_content)
+    from_files = load_rule_content_map_from_files(root, rows)
+    merged = dict(from_evolve)
+    merged.update(from_files)
+    return merged
+
+
+def build_rule_detail_template(row: dict, seed_content: str) -> str:
+    rule_id = row.get("rule_id", "").strip()
+    title = row.get("title", "").strip()
+    scope = row.get("scope", "").strip()
+    platform = row_platform(row)
+    origin = row.get("origin", "").strip()
+    status = row.get("status", "").strip()
+    header_suffix = f" {title}" if title else ""
+    base_rule = seed_content.strip() or title or "TODO: add detailed rule content."
+    lines = [
+        f"# [{rule_id}]{header_suffix}",
+        "",
+        f"- Scope: `{scope}`",
+        f"- Platform: `{platform}`",
+        f"- Origin: `{origin}`",
+        f"- Status: `{status}`",
+        f"- Last Synced: `{date.today().isoformat()}`",
+        "",
+        "## Rule",
+        base_rule,
+        "",
+        "## Trigger",
+        "- TODO",
+        "",
+        "## Must",
+        "- TODO",
+        "",
+        "## Verification",
+        "- TODO",
+        "",
+        "## Forbidden",
+        "- TODO",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def format_trace_links_for_rule_file(
+    rule_file: Path,
+    root: Path,
+    rel_paths: list[str],
+) -> str:
+    if not rel_paths:
+        return "(none)"
+    links = []
+    for rel in rel_paths:
+        target = root / rel
+        link_target = Path(os.path.relpath(target, rule_file.parent)).as_posix()
+        links.append(f"[{Path(rel).name}]({link_target})")
+    return ", ".join(links)
+
+
+def render_trace_links_block(
+    root: Path,
+    rule_file: Path,
+    rule_id: str,
+    trace_entry: dict[str, list[str]],
+) -> str:
+    begin_line = f"{TRACE_LINKS_BEGIN_PREFIX} rule_id={rule_id} -->"
+    history_links = format_trace_links_for_rule_file(rule_file, root, trace_entry.get("history", []))
+    runbook_links = format_trace_links_for_rule_file(rule_file, root, trace_entry.get("runbooks", []))
+    lines = [
+        begin_line,
+        "## Traceability",
+        f"- History: {history_links}",
+        f"- Runbook: {runbook_links}",
+        TRACE_LINKS_END,
+    ]
+    return "\n".join(lines)
+
+
+def upsert_trace_links_block(content: str, rule_id: str, block_content: str) -> str:
+    pattern = re.compile(
+        rf"<!--\s*EVOLVE_SKILL:TRACE_LINKS:BEGIN\s+rule_id={re.escape(rule_id)}[^\n]*-->\n.*?<!--\s*EVOLVE_SKILL:TRACE_LINKS:END\s*-->",
+        re.DOTALL,
+    )
+    if pattern.search(content):
+        return pattern.sub(lambda _m: block_content, content, count=1)
+
+    if not content.strip():
+        return block_content + "\n"
+
+    rule_section = re.search(
+        r"^##\s+Rule\s*$\n(.*?)(?=^##\s+|\Z)",
+        content,
+        re.MULTILINE | re.DOTALL,
+    )
+    if rule_section:
+        insert_at = rule_section.end()
+        before = content[:insert_at].rstrip()
+        after = content[insert_at:].lstrip("\n")
+        if after:
+            return before + "\n\n" + block_content + "\n\n" + after
+        return before + "\n\n" + block_content + "\n"
+
+    base = content.rstrip()
+    return base + "\n\n" + block_content + "\n"
+
+
+def sync_rule_detail_files(root: Path, rows: list[dict], evolve_content: str) -> dict[str, list[str]]:
+    """确保 evolve/rules 下有每条规则的详细内容文件，并维护可追溯链接。"""
+    rules_dir = rules_dir_path(root)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+    history_dir_path(root).mkdir(parents=True, exist_ok=True)
+    runbooks_dir_path(root).mkdir(parents=True, exist_ok=True)
+    evolve_content_map = extract_rule_content_map(evolve_content)
+    trace_map = resolve_rule_trace_map(root, rows, ensure_defaults=True)
+    created: list[str] = []
+    updated: list[str] = []
+    existing: list[str] = []
+    skipped: list[str] = []
+    targets: list[str] = []
+
+    for row in rows:
+        if row.get("status") == "archived":
+            continue
+        rule_id = row.get("rule_id", "").strip()
+        if not rule_id:
+            continue
+        path = rule_detail_path(root, rule_id)
+        targets.append(str(path))
+        seed = evolve_content_map.get(rule_id, "") or row.get("title", "").strip()
+        trace_entry = trace_map.get(rule_id, {"history": [], "runbooks": []})
+        block = render_trace_links_block(root, path, rule_id, trace_entry)
+
+        existed = path.exists()
+        old_content = ""
+        if existed:
+            try:
+                old_content = path.read_text(encoding="utf-8")
+            except OSError:
+                skipped.append(str(path))
+                continue
+        else:
+            old_content = build_rule_detail_template(row, seed)
+
+        if existed and "## Rule" not in old_content:
+            old_content = build_rule_detail_template(row, seed)
+
+        new_content = upsert_trace_links_block(old_content, rule_id, block)
+        if new_content != old_content:
+            try:
+                path.write_text(new_content, encoding="utf-8")
+            except OSError:
+                continue
+            if existed:
+                updated.append(str(path))
+            else:
+                created.append(str(path))
+        else:
+            if existed:
+                existing.append(str(path))
+            else:
+                created.append(str(path))
+
+    return {
+        "targets": targets,
+        "created": created,
+        "updated": updated,
+        "existing": existing,
+        "skipped": skipped,
+    }
+
+
+def print_rule_detail_sync_summary(summary: dict[str, list[str]]) -> None:
+    targets = summary.get("targets", [])
+    if not targets:
+        print("Rule detail sync: no targets")
+        return
+    created = summary.get("created", [])
+    updated = summary.get("updated", [])
+    existing = summary.get("existing", [])
+    skipped = summary.get("skipped", [])
+    print(
+        f"Rule detail sync complete: {len(targets)} targets, "
+        f"created={len(created)} updated={len(updated)} existing={len(existing)} skipped={len(skipped)}"
+    )
+    if created:
+        print("  Created:")
+        for path in created:
+            print(f"    - {path}")
+    if updated:
+        print("  Updated:")
+        for path in updated:
+            print(f"    - {path}")
+    if skipped:
+        print("  Skipped (read failed):")
+        for path in skipped:
+            print(f"    - {path}")
+
+
+def format_trace_links_inline(rel_paths: list[str]) -> str:
+    if not rel_paths:
+        return "(none)"
+    return ", ".join(f"[{Path(p).name}]({p})" for p in rel_paths)
+
+
+def format_rule_line(
+    row: dict,
+    rule_content_map: Optional[dict[str, str]] = None,
+    rule_trace_map: Optional[dict[str, dict[str, list[str]]]] = None,
+) -> str:
     title = row.get("title", "").strip()
     title_suffix = f" - {title}" if title else ""
     base = (
@@ -611,14 +1106,31 @@ def format_rule_line(row: dict, rule_content_map: Optional[dict[str, str]] = Non
 
     content = rule_content_map.get(row["rule_id"], "").strip()
     if not content:
-        return base
-    return f"{base}\n  Content: {content}"
+        rendered = base
+    else:
+        rendered = f"{base}\n  Content: {content}"
+
+    if not rule_trace_map:
+        return rendered
+
+    trace = rule_trace_map.get(row["rule_id"], {})
+    history = format_trace_links_inline(trace.get("history", []))
+    runbooks = format_trace_links_inline(trace.get("runbooks", []))
+    return f"{rendered}\n  Trace: History {history}; Runbook {runbooks}"
 
 
-def render_platform_sync_block(platform: str, evolve_content: str, rows: list[dict], digest: str) -> str:
+def render_platform_sync_block(
+    platform: str,
+    evolve_content: str,
+    rows: list[dict],
+    digest: str,
+    rule_content_map: Optional[dict[str, str]] = None,
+    rule_trace_map: Optional[dict[str, dict[str, list[str]]]] = None,
+) -> str:
     tldr_text = extract_markdown_section(evolve_content, "TL;DR")
     changelog_text = extract_markdown_section(evolve_content, "Changelog")
-    rule_content_map = extract_rule_content_map(evolve_content)
+    if rule_content_map is None:
+        rule_content_map = extract_rule_content_map(evolve_content)
 
     active_rows = [r for r in rows if r["status"] in ("active", "protected")]
     platform_rows = [
@@ -646,13 +1158,19 @@ def render_platform_sync_block(platform: str, evolve_content: str, rows: list[di
     ]
 
     if selected_platform_rows:
-        lines.extend(format_rule_line(row, rule_content_map) for row in selected_platform_rows)
+        lines.extend(
+            format_rule_line(row, rule_content_map, rule_trace_map)
+            for row in selected_platform_rows
+        )
     else:
         lines.append("- (no platform-specific rules found)")
 
     lines.extend(["", "### Universal High-Signal Rules"])
     if selected_universal_rows:
-        lines.extend(format_rule_line(row, rule_content_map) for row in selected_universal_rows)
+        lines.extend(
+            format_rule_line(row, rule_content_map, rule_trace_map)
+            for row in selected_universal_rows
+        )
     else:
         lines.append("- (no universal rules found)")
 
@@ -672,7 +1190,7 @@ def upsert_platform_sync_block(content: str, platform: str, block_content: str, 
         re.DOTALL,
     )
     if pattern.search(content):
-        return pattern.sub(block, content, count=1)
+        return pattern.sub(lambda _m: block, content, count=1)
 
     base = content.rstrip()
     if not base:
@@ -699,6 +1217,8 @@ def sync_platform_files(
     updated: list[str] = []
     unchanged: list[str] = []
     targets: list[str] = []
+    rule_content_map = resolve_rule_content_map(root, evolve_content, rows)
+    rule_trace_map = resolve_rule_trace_map(root, rows, ensure_defaults=False)
 
     for platform in platforms:
         target_path = resolve_platform_file_path(root, platform, config_map, marker_map)
@@ -712,8 +1232,21 @@ def sync_platform_files(
             except OSError:
                 old_content = ""
 
-        digest = build_platform_digest(platform, evolve_content, rows)
-        block_content = render_platform_sync_block(platform, evolve_content, rows, digest)
+        digest = build_platform_digest(
+            platform,
+            evolve_content,
+            rows,
+            rule_content_map,
+            rule_trace_map,
+        )
+        block_content = render_platform_sync_block(
+            platform,
+            evolve_content,
+            rows,
+            digest,
+            rule_content_map,
+            rule_trace_map,
+        )
         new_content = upsert_platform_sync_block(old_content, platform, block_content, digest)
 
         if new_content == old_content:
@@ -758,6 +1291,89 @@ def print_platform_sync_summary(summary: dict[str, list[str]]) -> None:
         print("  Updated:")
         for path in updated:
             print(f"    - {path}")
+
+
+def recommendation_score(row: dict) -> float:
+    cr = compliance_rate(row)
+    dr = danger_rate(row)
+    score = float(row.get("err", 0)) * 8.0 + float(row.get("vio", 0)) * 3.0
+    if cr is not None:
+        score += (1.0 - cr) * 4.0
+    if dr is not None:
+        score += dr * 3.0
+    if row.get("status") == "review":
+        score += 2.0
+    score += min(float(activity(row)), 10.0) * 0.2
+    return score
+
+
+def build_evolve_suggestions(root: Path, rows: list[dict], limit: int = 20) -> list[dict]:
+    rule_content_map = resolve_rule_content_map(root, "", rows)
+    rule_trace_map = resolve_rule_trace_map(root, rows, ensure_defaults=False)
+    candidates = []
+    for row in rows:
+        if row.get("status") == "archived":
+            continue
+        rid = row.get("rule_id", "")
+        content = rule_content_map.get(rid, "").strip()
+        if not content:
+            content = row.get("title", "").strip()
+        if not content:
+            continue
+        cr = compliance_rate(row)
+        dr = danger_rate(row)
+        reasons: list[str] = []
+        if row.get("err", 0) >= 2 and dr is not None and dr >= 0.5:
+            reasons.append("high-risk")
+        if row.get("vio", 0) >= 3 and cr is not None and cr < 0.5:
+            reasons.append("frequent-violation")
+        if row.get("status") == "review":
+            reasons.append("pending-review")
+        if row.get("hit", 0) >= 3 and row.get("vio", 0) == 0 and row.get("err", 0) == 0:
+            reasons.append("stable-good-practice")
+        if not reasons:
+            reasons.append("general-signal")
+        candidates.append(
+            {
+                "rule_id": rid,
+                "scope": row.get("scope", ""),
+                "title": row.get("title", ""),
+                "content": content,
+                "hit": row.get("hit", 0),
+                "vio": row.get("vio", 0),
+                "err": row.get("err", 0),
+                "status": row.get("status", ""),
+                "evolve_slot": row.get("evolve_slot", 0),
+                "score": recommendation_score(row),
+                "reasons": reasons,
+                "trace": rule_trace_map.get(rid, {"history": [], "runbooks": []}),
+            }
+        )
+
+    candidates.sort(
+        key=lambda c: (
+            c["score"],
+            c["err"],
+            c["vio"],
+            c["hit"],
+            c["rule_id"],
+        ),
+        reverse=True,
+    )
+    return candidates[:limit]
+
+
+def parse_selection_numbers(raw: str) -> list[int]:
+    numbers: list[int] = []
+    for token in re.split(r"[,\s]+", raw.strip()):
+        if not token:
+            continue
+        if not token.isdigit():
+            continue
+        n = int(token)
+        if n > 0 and n not in numbers:
+            numbers.append(n)
+    return numbers
 
 
 # ── Scope 匹配工具 ──
@@ -805,6 +1421,9 @@ def parse_score_string(score_str: str) -> dict[str, list[str]]:
 def cmd_init(root: Path) -> None:
     """初始化 audit.csv"""
     path = audit_csv_path(root)
+    history_dir_path(root).mkdir(parents=True, exist_ok=True)
+    runbooks_dir_path(root).mkdir(parents=True, exist_ok=True)
+    rules_dir_path(root).mkdir(parents=True, exist_ok=True)
     if path.exists():
         print(f"audit.csv already exists -> {path}")
         return
@@ -1075,11 +1694,16 @@ def cmd_sync(root: Path, args: Optional[list[str]] = None) -> None:
 
         updated_rows.append(row)
 
+    rule_detail_summary = sync_rule_detail_files(root, updated_rows, content)
+    selected_rows = filter_rows_for_evolve_sync(updated_rows, evolve_platform)
+    selected_block = render_selected_rules_block(root, selected_rows)
+    content = upsert_selected_rules_block(content, selected_block)
     write_evolve(md_path, content)
     write_audit(csv_path, updated_rows)
     platform_summary = sync_platform_files(root, updated_rows, content, args)
 
     print(f"Sync complete -> {md_path}")
+    print_rule_detail_sync_summary(rule_detail_summary)
     if evolve_platform and evolve_platform != PLATFORM_ALL:
         print(f"EVOLVE.md sync target: universal + platform={evolve_platform}")
     print_platform_sync_summary(platform_summary)
@@ -1105,7 +1729,9 @@ def cmd_sync_platform(root: Path, args: Optional[list[str]] = None) -> None:
     if not content:
         return
 
+    rule_detail_summary = sync_rule_detail_files(root, rows, content)
     summary = sync_platform_files(root, rows, content, args)
+    print_rule_detail_sync_summary(rule_detail_summary)
     print_platform_sync_summary(summary)
 
 
@@ -1194,6 +1820,110 @@ def cmd_report(root: Path) -> None:
                 print(f"  [{r['rule_id']}] {r['scope']} - activity: {act} (hit:{r['hit']} vio:{r['vio']})")
         print()
 
+    suggestions = build_evolve_suggestions(root, rows, limit=20)
+    if suggestions:
+        print("[EVOLVE SUGGESTIONS] Candidates for writing into EVOLVE.md Rules:")
+        for idx, item in enumerate(suggestions, 1):
+            reasons = "/".join(item.get("reasons", []))
+            slot = int(item.get("evolve_slot", 0))
+            selected = f" selected:#{slot}" if slot > 0 else ""
+            print(
+                f"  ({idx:02d}) [{item['rule_id']}] [{item['scope']}] "
+                f"hit:{item['hit']} vio:{item['vio']} err:{item['err']} score:{item['score']:.1f}"
+                f"{selected} reason:{reasons}"
+            )
+        print()
+        print("Select entries by number (agent decision):")
+        print("  audit_sync.py select \"1,3,5\" --project-root .")
+        print("Clear all selections:")
+        print("  audit_sync.py select --clear --project-root .")
+        print()
+
+
+def cmd_select(root: Path, args: Optional[list[str]] = None) -> None:
+    """按 report 建议编号选择要写入 EVOLVE.md 的规则条目。"""
+    args = args or []
+    clear = has_flag(args, "--clear")
+    raw_selection = ""
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--project-root" and i + 1 < len(args):
+            i += 2
+            continue
+        if arg.startswith("--project-root="):
+            i += 1
+            continue
+        if arg == "--clear":
+            i += 1
+            continue
+        if arg.startswith("--"):
+            i += 1
+            continue
+        if not raw_selection:
+            raw_selection = arg
+        i += 1
+
+    csv_path = audit_csv_path(root)
+    rows = read_audit(csv_path)
+    if not rows:
+        print("audit.csv is empty or missing")
+        return
+
+    if clear:
+        updated = []
+        changed = 0
+        for row in rows:
+            new_row = {**row}
+            if int(new_row.get("evolve_slot", 0)) != 0:
+                changed += 1
+            new_row["evolve_slot"] = 0
+            updated.append(new_row)
+        write_audit(csv_path, updated)
+        print(f"Cleared evolve selections: {changed} rows reset")
+        return
+
+    suggestions = build_evolve_suggestions(root, rows, limit=200)
+    if not suggestions:
+        print("No evolve suggestions available")
+        return
+
+    if not raw_selection:
+        print("Usage: audit_sync.py select \"1,3,5\" [--project-root .]")
+        print("Hint: run `audit_sync.py report --project-root .` to view numbered suggestions")
+        return
+
+    numbers = parse_selection_numbers(raw_selection)
+    if not numbers:
+        print(f"Cannot parse selection numbers: {raw_selection}")
+        return
+
+    invalid = [n for n in numbers if n > len(suggestions)]
+    if invalid:
+        print(f"Invalid suggestion numbers: {', '.join(str(n) for n in invalid)}")
+        print(f"Available range: 1..{len(suggestions)}")
+        return
+
+    slot_map: dict[str, int] = {}
+    selected_suggestions = []
+    for order, n in enumerate(numbers, 1):
+        item = suggestions[n - 1]
+        rid = item["rule_id"]
+        slot_map[rid] = order
+        selected_suggestions.append((order, item))
+
+    updated_rows = []
+    for row in rows:
+        new_row = {**row}
+        new_row["evolve_slot"] = int(slot_map.get(row.get("rule_id", ""), 0))
+        updated_rows.append(new_row)
+    write_audit(csv_path, updated_rows)
+
+    print(f"Evolve selection updated: {len(selected_suggestions)} rules selected")
+    for order, item in selected_suggestions:
+        print(f"  slot#{order} <- [{item['rule_id']}] [{item['scope']}] {item.get('title', '')}")
+    print("Next step: run `audit_sync.py sync --project-root .` to generate EVOLVE.md content")
+
 
 def cmd_promote(root: Path, args: Optional[list[str]] = None) -> None:
     """输出晋升建议"""
@@ -1263,6 +1993,8 @@ def main():
         cmd_scopes(root, remaining_args)
     elif command == "promote":
         cmd_promote(root, remaining_args)
+    elif command == "select":
+        cmd_select(root, remaining_args)
     elif command == "init":
         cmd_init(root)
     elif command == "sync":
@@ -1273,7 +2005,7 @@ def main():
         cmd_report(root)
     else:
         print(f"Unknown command: {command}")
-        print("Available commands: init, scopes, filter, score, sync, sync_platform, report, promote")
+        print("Available commands: init, scopes, filter, score, select, sync, sync_platform, report, promote")
         sys.exit(1)
 
 

@@ -5,11 +5,11 @@
 每条经验/规则对应一行记录，CSV 格式：
 
 ```csv
-rule_id,platform,scope,title,origin,hit,vio,err,skip,auto_skip,last_reviewed,status
-R-001,all,部署/Docker,必须先检查 .env 是否存在,error,5,1,0,2,0,2026-02-22,active
-R-002,all,前端/React,状态更新必须用 immutable 模式,preventive,3,0,0,0,0,2026-02-20,active
-S-001,claude,Claude/工具,生成 JSX 时必须检查闭合标签,error,2,3,2,0,1,2026-02-22,active
-R-003,all,Git/提交,commit 前必须运行 lint,imported,8,0,0,0,0,2026-02-21,active
+rule_id,platform,scope,title,origin,hit,vio,err,skip,auto_skip,last_reviewed,status,evolve_slot
+R-001,all,部署/Docker,必须先检查 .env 是否存在,error,5,1,0,2,0,2026-02-22,active,2
+R-002,all,前端/React,状态更新必须用 immutable 模式,preventive,3,0,0,0,0,2026-02-20,active,0
+S-001,claude,Claude/工具,生成 JSX 时必须检查闭合标签,error,2,3,2,0,1,2026-02-22,active,1
+R-003,all,Git/提交,commit 前必须运行 lint,imported,8,0,0,0,0,2026-02-21,active,0
 ```
 
 **字段说明**：
@@ -28,6 +28,7 @@ R-003,all,Git/提交,commit 前必须运行 lint,imported,8,0,0,0,0,2026-02-21,a
 | `last_reviewed` | date | 最后一次审计日期 |
 | `origin` | enum | 规则来源：`error`（源于实际错误/返工） / `preventive`（预防性，未出过错） / `imported`（从外部导入的最佳实践） |
 | `status` | enum | `active` / `protected`（用户确认有价值） / `review`（待审查） / `archived`（已归档） |
+| `evolve_slot` | int | EVOLVE Rules 写入顺序槽位：`0` 表示不写入，`>=1` 表示写入并按编号排序 |
 
 ## 复盘时的审计流程（使用辅助工具）
 
@@ -65,7 +66,19 @@ python audit_sync.py score "R-001:+hit R-008:+vio+err" --scope "前端,React" --
 - 未打分但匹配条件（scope/platform）命中的条目自动 `auto_skip+1`
 - `--scope` / `--platform` 共同决定哪些未打分条目会被 auto_skip（都省略则不自动 skip）
 
-### 4) 核心同步（EVOLVE + 平台文件）
+### 4) 生成写入建议（report）
+```bash
+python audit_sync.py report --project-root .
+```
+- 输出带编号的 `EVOLVE SUGGESTIONS`，用于后续人工选择。
+
+### 5) 选择写入 EVOLVE 的条目（select）
+```bash
+python audit_sync.py select "1,3" --project-root .
+```
+- `select` 会把编号结果回写到 `evolve/audit.csv` 的 `evolve_slot`。
+
+### 6) 核心同步（EVOLVE + 平台文件）
 ```bash
 python audit_sync.py sync --project-root .
 ```
@@ -75,6 +88,7 @@ python audit_sync.py sync --project-root .
 - 可选参数：
   - `--platform <name>`：仅同步指定平台文件
   - `--no-platform-sync`：仅更新 EVOLVE.md，跳过平台文件同步
+  - `--evolve-platform <name>`：限制 EVOLVE.md 同步目标为“通用规则 + 指定平台规则”
 - 仅做平台同步：
 ```bash
 python audit_sync.py sync_platform --project-root . [--platform <name>]
@@ -165,20 +179,26 @@ python audit_sync.py score "R-001:+hit R-003:+vio+err" --scope "前端,React"
 # 一行式打分（限定平台教训）
 python audit_sync.py score "R-001:+hit S-003:+vio" --scope "前端,React" --platform codex
 
-# 从 CSV 同步指标到 EVOLVE.md（TL;DR + Rules 内联标签）
+# 查看审计报告并生成带编号建议
+python audit_sync.py report
+
+# 选择建议条目写入 evolve_slot（示例选择第 1 和第 3 条）
+python audit_sync.py select "1,3"
+
+# 从 CSV 同步指标到 EVOLVE.md（TL;DR + Rules 内联标签 + RULE_SELECTION）
 python audit_sync.py sync
 
 # 仅同步某个平台文件
 python audit_sync.py sync --platform codex
+
+# 限制 EVOLVE.md 同步目标为“通用 + 指定平台”
+python audit_sync.py sync --evolve-platform codex
 
 # 跳过平台文件同步，仅更新 EVOLVE.md
 python audit_sync.py sync --no-platform-sync
 
 # 仅同步平台文件（不改写 EVOLVE.md）
 python audit_sync.py sync_platform
-
-# 查看审计报告（推导指标 + 异常检测）
-python audit_sync.py report
 
 # 输出晋升建议（平台教训 → 用户级）
 python audit_sync.py promote

@@ -5,7 +5,7 @@
 ## 1. 创建目录结构
 在项目根目录创建所需的文件夹结构：
 ```bash
-mkdir -p evolve/history evolve/runbooks
+mkdir -p evolve/history evolve/runbooks evolve/rules
 ```
 
 ## 2. 创建 EVOLVE.md 骨架
@@ -42,12 +42,19 @@ python <skill-root>/scripts/audit_sync.py init --project-root .
 
 初始化后，`audit.csv` 表头应包含 `platform` 字段：
 ```csv
-rule_id,platform,scope,title,origin,hit,vio,err,skip,auto_skip,last_reviewed,status
+rule_id,platform,scope,title,origin,hit,vio,err,skip,auto_skip,last_reviewed,status,evolve_slot
 ```
 
 约定：
 - `R-xxx`（通用规则）使用 `platform=all`
 - `S-xxx`（平台教训）使用明确平台值（如 `claude/gemini/codex/cursor`，或自定义平台名）
+
+初始化后建议先完成一次最小闭环：
+```bash
+python <skill-root>/scripts/audit_sync.py report --project-root .
+python <skill-root>/scripts/audit_sync.py select "1" --project-root .
+python <skill-root>/scripts/audit_sync.py sync --project-root .
+```
 
 ## 4. 初始化平台配置文件（按需）
 根据当前使用的 AI 平台（如 Claude），在根目录创建或更新对应的配置文件（如 `CLAUDE.md`），并确保包含以下基础约束章节：

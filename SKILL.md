@@ -20,6 +20,8 @@ description: 核心进化技能。在开发结束时调用，自动分析对话�
     │   └── YYYY-MM-DD-<topic>.md
     ├── runbooks/                      # 操作手册（分文件）
     │   └── YYYY-MM-DD-<topic>.md
+    ├── rules/                         # 规则详细内容（分文件，主沉淀对象）
+    │   └── <RULE_ID>.md
     ├── archived-rules.md              # 已归档规则（用户确认过时后迁入）
     └── changelog-archive.md           # Changelog 归档（超 30 条时迁移）
 ```
@@ -55,7 +57,7 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 - `EVOLVE.md`（主目标文件）
 - `CLAUDE.md` / `GEMINI.md` / `AGENTS.md` / `CURSOR.md` / 其他（按照平台身份选择）
 - （可选参考）`README.md`（仅用于了解项目介绍与目录结构，不写入）
-- （可选参考）`evolve/runbooks/*`、`evolve/history/*`
+- （可选参考）`evolve/runbooks/*`、`evolve/history/*`、`evolve/rules/*`
 
 **首次初始化**：若 `EVOLVE.md` 不存在，请参阅 [references/project-init.md](references/project-init.md) 完成项目进化资产的完整初始化。
 
@@ -64,6 +66,8 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 1. 运行 `scopes` 查看可用领域。
 2. 运行 `filter` 筛选与本次任务相关的条目；若本次要复盘平台教训（S-xxx），必须加 `--platform <platform-name>`（如 `claude|gemini|codex|cursor`，也可自定义）以避免跨平台污染。
 3. 运行 `score` 对本次复盘中遵守或违反的已有规则进行打分（+hit/+vio/+err）；若使用了平台过滤，`score` 也必须带同样的 `--platform`。
+4. 运行 `report` 查看审计结果与带编号的 `EVOLVE SUGGESTIONS`。
+5. Agent 基于审计结果决定最终写入条目，并运行 `select` 回写 `evolve_slot`（如：`python <skill-root>/scripts/audit_sync.py select "1,3" --project-root .`）。
 详细命令参考 [references/audit-system.md](references/audit-system.md)。
 
 ### Step 3：深度回顾与分析（双向复盘）
@@ -102,9 +106,12 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
    - *注意：在编写具体内容时，请务必查阅 [references/writing-specs.md](references/writing-specs.md) 获取模板和规范。*
 2. **核心同步**：运行 `python <skill-root>/scripts/audit_sync.py sync --project-root .`，一次完成：
    - 审计指标同步到 `EVOLVE.md`（TL;DR + Rules 内联标签）
+   - 依据 `evolve_slot` 在 `EVOLVE.md` 的 `## Rules` 下生成/更新 `RULE_SELECTION`
+   - 同步 `evolve/rules/*.md` 详细规则内容与 Traceability（history/runbook 链接）
    - 平台文件自动同步（已知平台 + audit.csv 中新增平台 + 配置映射平台）
 3. **可选控制**：
    - 仅同步单个平台：`python <skill-root>/scripts/audit_sync.py sync --project-root . --platform <name>`
+   - 限制 EVOLVE 同步目标：`python <skill-root>/scripts/audit_sync.py sync --project-root . --evolve-platform <name>`
    - 仅同步平台文件：`python <skill-root>/scripts/audit_sync.py sync_platform --project-root . [--platform <name>]`
    - 临时跳过平台同步：`python <skill-root>/scripts/audit_sync.py sync --project-root . --no-platform-sync`
 4. **可选映射配置**：在 `evolve/platform_targets.json` 指定平台到文件路径映射（例如将某个平台映射到自定义文件名/子目录）。
@@ -132,5 +139,4 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 * TL;DR 是否因审计数据发生了变更（新增强调/移除淡化）
 * 是否有晋升建议（如有，列出待确认的条目）
 * 是否发现并避免写入敏感信息（如有，说明已做脱敏/占位符）
-
 
