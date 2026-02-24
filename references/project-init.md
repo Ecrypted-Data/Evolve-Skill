@@ -7,6 +7,10 @@
 ```bash
 mkdir -p evolve/history evolve/runbooks evolve/rules
 ```
+Windows PowerShell 可使用：
+```powershell
+New-Item -ItemType Directory -Force -Path evolve/history,evolve/runbooks,evolve/rules | Out-Null
+```
 
 ## 2. 创建 EVOLVE.md 骨架
 在根目录创建 `EVOLVE.md`，并写入以下基础结构（这是唯一的真理源）：

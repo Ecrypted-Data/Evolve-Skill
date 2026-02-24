@@ -36,18 +36,18 @@ AI 复盘时使用以下流程，最大限度减少上下文消耗和审计阻�
 
 ### 1) 查看可用 scope
 ```bash
-python audit_sync.py scopes --project-root .
+python <skill-root>/scripts/audit_sync.py scopes --project-root .
 ```
 输出所有有效关键词及规则数量，避免 filter 打空。
 
 按平台查看（仅筛选对应平台的 S- 规则，R- 规则默认保留）：
 ```bash
-python audit_sync.py scopes --platform codex --project-root .
+python <skill-root>/scripts/audit_sync.py scopes --platform codex --project-root .
 ```
 
 ### 2) 筛选相关条目
 ```bash
-python audit_sync.py filter "前端,React" --platform codex --project-root .
+python <skill-root>/scripts/audit_sync.py filter "前端,React" --platform codex --project-root .
 ```
 输出精简表格（仅 scope 匹配的 active 条目）：
 ```
@@ -60,7 +60,7 @@ python audit_sync.py filter "前端,React" --platform codex --project-root .
 
 ### 3) 一行式打分
 ```bash
-python audit_sync.py score "R-001:+hit R-008:+vio+err" --scope "前端,React" --platform codex --project-root .
+python <skill-root>/scripts/audit_sync.py score "R-001:+hit R-008:+vio+err" --scope "前端,React" --platform codex --project-root .
 ```
 - 已打分的条目更新对应计数，`auto_skip` 清零
 - 未打分但匹配条件（scope/platform）命中的条目自动 `auto_skip+1`
@@ -68,19 +68,19 @@ python audit_sync.py score "R-001:+hit R-008:+vio+err" --scope "前端,React" --
 
 ### 4) 生成写入建议（report）
 ```bash
-python audit_sync.py report --project-root .
+python <skill-root>/scripts/audit_sync.py report --project-root .
 ```
 - 输出带编号的 `EVOLVE SUGGESTIONS`，用于后续人工选择。
 
 ### 5) 选择写入 EVOLVE 的条目（select）
 ```bash
-python audit_sync.py select "1,3" --project-root .
+python <skill-root>/scripts/audit_sync.py select "1,3" --project-root .
 ```
 - `select` 会把编号结果回写到 `evolve/audit.csv` 的 `evolve_slot`。
 
 ### 6) 核心同步（EVOLVE + 平台文件）
 ```bash
-python audit_sync.py sync --project-root .
+python <skill-root>/scripts/audit_sync.py sync --project-root .
 ```
 - 默认执行两类同步：
   - EVOLVE.md 指标同步（TL;DR + Rules 内联标签）
@@ -91,7 +91,7 @@ python audit_sync.py sync --project-root .
   - `--evolve-platform <name>`：限制 EVOLVE.md 同步目标为“通用规则 + 指定平台规则”
 - 仅做平台同步：
 ```bash
-python audit_sync.py sync_platform --project-root . [--platform <name>]
+python <skill-root>/scripts/audit_sync.py sync_platform --project-root . [--platform <name>]
 ```
 
 ## 推导指标（按需计算，不存储）
@@ -159,52 +159,52 @@ python audit_sync.py sync_platform --project-root . [--platform <name>]
 
 ```bash
 # 初始化 audit.csv
-python audit_sync.py init
+python <skill-root>/scripts/audit_sync.py init
 
 # 查看所有有效 scope 关键词
-python audit_sync.py scopes
+python <skill-root>/scripts/audit_sync.py scopes
 
 # 按平台查看 scope（解耦平台教训）
-python audit_sync.py scopes --platform codex
+python <skill-root>/scripts/audit_sync.py scopes --platform codex
 
 # 筛选与当前任务相关的经验条目
-python audit_sync.py filter "前端,React"
+python <skill-root>/scripts/audit_sync.py filter "前端,React"
 
 # 按 scope + platform 筛选（避免跨平台教训干扰）
-python audit_sync.py filter "前端,React" --platform codex
+python <skill-root>/scripts/audit_sync.py filter "前端,React" --platform codex
 
 # 一行式打分（未打分的 filter 匹配项自动 auto_skip+1）
-python audit_sync.py score "R-001:+hit R-003:+vio+err" --scope "前端,React"
+python <skill-root>/scripts/audit_sync.py score "R-001:+hit R-003:+vio+err" --scope "前端,React"
 
 # 一行式打分（限定平台教训）
-python audit_sync.py score "R-001:+hit S-003:+vio" --scope "前端,React" --platform codex
+python <skill-root>/scripts/audit_sync.py score "R-001:+hit S-003:+vio" --scope "前端,React" --platform codex
 
 # 查看审计报告并生成带编号建议
-python audit_sync.py report
+python <skill-root>/scripts/audit_sync.py report
 
 # 选择建议条目写入 evolve_slot（示例选择第 1 和第 3 条）
-python audit_sync.py select "1,3"
+python <skill-root>/scripts/audit_sync.py select "1,3"
 
 # 从 CSV 同步指标到 EVOLVE.md（TL;DR + Rules 内联标签 + RULE_SELECTION）
-python audit_sync.py sync
+python <skill-root>/scripts/audit_sync.py sync
 
 # 仅同步某个平台文件
-python audit_sync.py sync --platform codex
+python <skill-root>/scripts/audit_sync.py sync --platform codex
 
 # 限制 EVOLVE.md 同步目标为“通用 + 指定平台”
-python audit_sync.py sync --evolve-platform codex
+python <skill-root>/scripts/audit_sync.py sync --evolve-platform codex
 
 # 跳过平台文件同步，仅更新 EVOLVE.md
-python audit_sync.py sync --no-platform-sync
+python <skill-root>/scripts/audit_sync.py sync --no-platform-sync
 
 # 仅同步平台文件（不改写 EVOLVE.md）
-python audit_sync.py sync_platform
+python <skill-root>/scripts/audit_sync.py sync_platform
 
 # 输出晋升建议（平台教训 → 用户级）
-python audit_sync.py promote
+python <skill-root>/scripts/audit_sync.py promote
 
 # 仅输出 codex 平台晋升建议
-python audit_sync.py promote --platform codex
+python <skill-root>/scripts/audit_sync.py promote --platform codex
 ```
 
 > **注意**：`audit_sync.py` 位于 Evolve-Skill skill 目录（`<skill-root>/scripts/`），执行时需传入项目根目录路径。
@@ -215,10 +215,10 @@ python audit_sync.py promote --platform codex
 
 ```bash
 # 文本报告（默认）
-python health_check.py --project-root .
+python <skill-root>/scripts/health_check.py --project-root .
 
 # JSON 格式（便于自动化消费）
-python health_check.py --project-root . --json
+python <skill-root>/scripts/health_check.py --project-root . --json
 ```
 
 **检查维度**：
@@ -240,3 +240,4 @@ python health_check.py --project-root . --json
 - 定期巡检（如每周一次）
 
 > **注意**：`health_check.py` 与 `audit_sync.py` 位于同一目录（`<skill-root>/scripts/`）。
+

@@ -90,7 +90,9 @@ Runbook 的核心是“照做即可复现”，建议包含：
 
 * Claude → `CLAUDE.md`
 * Gemini → `GEMINI.md`
-* Codex/其他 → `AGENTS.md`
+* Codex → `AGENTS.md`
+* Cursor → `CURSOR.md`
+* 其他平台 → `<PLATFORM>.md`（默认平台名大写，可通过 `evolve/platform_targets.json` 覆盖映射）
 
 2. 在目标文件查找或创建章节：
    `## 🧬 自我进化/经验教训`
@@ -118,6 +120,7 @@ Runbook 的核心是“照做即可复现”，建议包含：
 | Claude | `<project>/CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | Gemini | `<project>/GEMINI.md` | `~/.gemini/GEMINI.md`（或对应全局配置） |
 | Codex | `<project>/AGENTS.md` | `~/.codex/AGENTS.md`（或对应全局配置） |
+| Cursor | `<project>/CURSOR.md` | 对应平台用户级配置（按平台文档） |
 
 **晋升判定条件**（满足任一即可）：
 1. **跨项目复现**：同一教训在 2 个以上项目中被记录过

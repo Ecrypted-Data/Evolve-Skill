@@ -58,7 +58,7 @@ git clone https://github.com/Ecrypted-Data/Evolve-Skill.git ~/.claude/skills/Evo
 
 > **「总结经验」「进化」「evolve」「复盘」「summarize lessons」「retrospective」「postmortem」**
 
-触发后，AI 会自动执行读取上下文、审计打分（`scopes/filter/score`）、同步（`sync`）和健康检查流程。
+触发后，AI 会自动执行读取上下文、审计打分（`scopes/filter/score`）、同步（`sync`），并通常在收尾阶段执行健康检查。
 
 ---
 
@@ -132,7 +132,9 @@ skill触发后，AI 将按“概览 + 执行版”两层流程运行。
     ├── audit.csv                      # 核心：经验追踪与生命周期审计数据
     ├── history/                       # 分文件存储的重大事件复盘记录
     ├── runbooks/                      # 分文件存储的标准操作手册（如部署、发版步骤）
-    └── rules/                         # 每条规则的详细内容与追溯链接（history/runbooks）
+    ├── rules/                         # 每条规则的详细内容与追溯链接（history/runbooks）
+    ├── archived-rules.md              # 归档规则（用户确认过时后迁入）
+    └── changelog-archive.md           # Changelog 归档（主文件条目过多时迁移）
 
 ```
 

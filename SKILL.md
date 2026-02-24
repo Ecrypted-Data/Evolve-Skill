@@ -41,9 +41,9 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 ### 2) 平台配置文件（仅平台特有）
 - Claude：`CLAUDE.md`
 - Gemini：`GEMINI.md`
-- Codex/通用：`AGENTS.md`
-- cursor：`CURSOR.md`
-- 其他：`<PLATFORM>.md`
+- Codex：`AGENTS.md`
+- Cursor：`CURSOR.md`
+- 其他平台：`<PLATFORM>.md`
 
 这些文件只写入**平台特有**的偏好/坑位/限制，不写通用规则（通用只在 EVOLVE.md）。
 平台文件中的自动同步内容由 `audit_sync.py sync` / `sync_platform` 维护，使用 `<!-- EVOLVE_SKILL:AUTO_SYNC:BEGIN ... -->` 标记块更新，不覆盖手写内容。
@@ -115,6 +115,7 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
    - 仅同步平台文件：`python <skill-root>/scripts/audit_sync.py sync_platform --project-root . [--platform <name>]`
    - 临时跳过平台同步：`python <skill-root>/scripts/audit_sync.py sync --project-root . --no-platform-sync`
 4. **可选映射配置**：在 `evolve/platform_targets.json` 指定平台到文件路径映射（例如将某个平台映射到自定义文件名/子目录）。
+5. **收尾健康检查（建议执行）**：运行 `python <skill-root>/scripts/health_check.py --project-root .`，若存在 FAIL/WARN，在汇报中说明风险与后续处理建议。
 
 ---
 
@@ -139,4 +140,3 @@ EVOLVE.md 承载三类内容（强烈建议按固定结构维护）：
 * TL;DR 是否因审计数据发生了变更（新增强调/移除淡化）
 * 是否有晋升建议（如有，列出待确认的条目）
 * 是否发现并避免写入敏感信息（如有，说明已做脱敏/占位符）
-
