@@ -66,8 +66,6 @@ After triggering, the AI automatically runs context reading, audit scoring (`sco
 
 After the skill is triggered, the AI runs in two layers: "overview + executable flow".
 
-![The Closed-Loop Workflow](asset/images/readme/The%20Closed-Loop%20Workflow.png)
-
 ### Overview Flow (6 Steps)
 
 1. **Read context**: scan `EVOLVE.md` and platform config files.

@@ -66,8 +66,6 @@ git clone https://github.com/Ecrypted-Data/Evolve-Skill.git ~/.claude/skills/Evo
 
 skill触发后，AI 将按“概览 + 执行版”两层流程运行。
 
-![闭环工作流](asset/images/readme/The%20Closed-Loop%20Workflow.png)
-
 ### 概览流程（6 步）
 
 1. **读取上下文**：扫描 `EVOLVE.md` 与平台配置文件。
